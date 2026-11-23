@@ -55,7 +55,7 @@ def video_predictions(model, dataset, batch_size, device, workers=0, amp=False):
 
 
 def train(folder, output, stage, checkpoint=None, epochs=5, batch_size=8, device="cpu", seed=42,
-          frames_per_video=None, workers=0, amp=None):
+          frames_per_video=None, workers=0, amp=None, augment=False):
     """Train one stage.
 
     frames_per_video: spatial stage only. Draw this many crops per training video per epoch
@@ -63,6 +63,7 @@ def train(folder, output, stage, checkpoint=None, epochs=5, batch_size=8, device
         the original behaviour.
     workers: DataLoader worker processes.
     amp: float16 mixed precision on CUDA. None = on for CUDA, off for CPU.
+    augment: spatial stage only. Random flips, rescaling, blur, colour and JPEG changes on training crops.
     """
     if epochs < 1 or batch_size < 1 or workers < 0:
         raise ValueError("epochs and batch_size must be positive; workers cannot be negative")
@@ -73,7 +74,9 @@ def train(folder, output, stage, checkpoint=None, epochs=5, batch_size=8, device
     np.random.seed(seed)
     torch.manual_seed(seed)
     temporal = stage == "temporal"
-    training, validation = Samples(folder, "train", temporal), Samples(folder, "val", temporal)
+    if augment and temporal:
+        raise ValueError("augment applies to the spatial stage only")
+    training, validation = Samples(folder, "train", temporal, augment), Samples(folder, "val", temporal)
     if len({validation.videos[v]["label"] for v, _ in validation.samples}) != 2:
         raise ValueError("Validation needs assessable videos from both classes")
     output = Path(output)
@@ -151,11 +154,14 @@ def train(folder, output, stage, checkpoint=None, epochs=5, batch_size=8, device
                        "training_groups": [{k: row[k] for k in ("dataset", "video_id", "source_ids", "identity_ids", "split")}
                                            for row in training.index["videos"] if row["split"] in {"train", "val"}],
                        "initialisation": "ImageNet EfficientNet-B0", "batch_size": batch_size,
-                       "sampler": "class-balanced then video-balanced replacement", "device": device,
+                       "sampler": "dataset-and-class balanced, then video-balanced replacement", "device": device,
+                       "max_samples": training.index.get("max_samples"),
                        "frames_per_video": None if temporal else frames_per_video, "samples_per_epoch": seen,
                        "mixed_precision": amp,
                        "python": platform.python_version(), "torch": str(torch.__version__),
-                       "augmentation": "none", "calibrated": False}
+                       "augmentation": metadata.get("augmentation", "none") if temporal else
+                                       ("flip, rescale, blur, colour, JPEG" if augment else "none"),
+                       "calibrated": False}
             if temporal:
                 current["spatial_checkpoint_sha256"] = file_sha256(checkpoint)
             save_checkpoint(output, model, current)

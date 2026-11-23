@@ -23,7 +23,8 @@ function selectOptions(select, options, empty) {
 function sortedReports() { return [...state.reports].sort((a, b) => (a.report.split === 'external') - (b.report.split === 'external')); }
 function currentReport() { return state.reports.find(r => r.name === $('report-select').value)?.report; }
 function currentMetrics() { return currentReport()?.metrics?.[$('model-select').value]?.[$('domain-select').value]; }
-function predictions(model = $('model-select').value) { return (currentReport()?.[`${model}_predictions`] || []).filter(p => p.dataset === $('domain-select').value); }
+function inDomain(p, domain) { return p.domains ? p.domains.includes(domain) : p.dataset === domain; }
+function predictions(model = $('model-select').value) { return (currentReport()?.[`${model}_predictions`] || []).filter(p => inDomain(p, $('domain-select').value)); }
 function accuracy(m) { if (Number.isFinite(m?.accuracy)) return m.accuracy; const c = m?.confusion_matrix; return c && m.count ? (c[0][0] + c[1][1]) / m.count : null; }
 function kpis(id, m) {
   $(id).replaceChildren();
@@ -70,11 +71,11 @@ function overview() {
 }
 function generalisation() {
   const host = $('generalisation'); host.replaceChildren();
-  const cards = sortedReports().flatMap(r => Object.entries(r.report.metrics?.temporal || {}).map(([domain, m]) => ({domain, external: r.report.split === 'external', m})));
+  const cards = sortedReports().flatMap(r => Object.entries(r.report.metrics?.temporal || {}).map(([domain, m]) => ({domain, external: r.report.split === 'external' || domain.includes('unseen'), unseenMethod: domain.includes('unseen'), m})));
   if (!cards.length) { host.append(element('p', 'Appears after the internal and external evaluations.', 'empty-copy')); return; }
-  for (const {domain, external, m} of cards) {
+  for (const {domain, external, unseenMethod, m} of cards) {
     const card = element('div', undefined, `gap-card${external ? ' external' : ''}`);
-    card.append(element('span', external ? 'UNSEEN DATASET' : 'IN-DOMAIN TEST', 'eyebrow'), element('h3', domain));
+    card.append(element('span', unseenMethod ? 'UNSEEN METHOD' : external ? 'UNSEEN DATASET' : 'IN-DOMAIN TEST', 'eyebrow'), element('h3', domain));
     [['ROC-AUC', m.roc_auc, decimal], ['Recall (fakes caught)', m.recall, percent], ['False-positive rate', m.false_positive_rate, percent]].forEach(([label, value, format]) => {
       const row = element('div', undefined, 'gap-row'), bar = element('div', undefined, 'gap-bar'), fill = element('i');
       fill.style.width = `${Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0)) * 100}%`; bar.append(fill);
@@ -113,7 +114,7 @@ function evaluation() {
   } else $('confusion').append(element('p', 'The confusion matrix appears after evaluation.', 'empty-copy'));
   const ps = predictions(), bins = FGCharts.histogram(ps);
   FGCharts.plot($('distribution'), [{name: 'Real', points: ps.length ? bins.map(b => [b.x, b.real]) : []}, {name: 'Manipulated', points: ps.length ? bins.map(b => [b.x, b.fake]) : []}], {title: 'Score distribution', bars: true, xLabel: 'Manipulation score', yLabel: 'Video count', yMax: Math.max(1, ...bins.flatMap(b => [b.real, b.fake])), empty: 'Video score distributions appear after evaluation.'});
-  const excluded = (report?.unassessed || []).filter(p => p.dataset === domain);
+  const excluded = (report?.unassessed || []).filter(p => p.dataset === domain || domain === 'All datasets');
   $('exclusions').textContent = report ? `${number(m?.count)} assessed videos · ${excluded.length} excluded or unassessable. ${report.note || ''}` : 'Excluded and unassessable videos will be counted in each evaluation.';
   predictionTable();
 }
@@ -176,7 +177,7 @@ function showVerdict(v, maxFrames) {
   const notes = [];
   if (v.max_faces > 1) notes.push('More than one face appeared. The model was evaluated on single-face videos only.');
   if (v.mode === 'temporal' && maxFrames) notes.push(`Only the first ${maxFrames} sampled frames (~${maxFrames / 8} s) are scored, matching the evaluated protocol.`);
-  notes.push('Reliable on FaceForensics++-style fakes; it misses most fakes from unseen generators (see Overview), so "no manipulation detected" is weak evidence.');
+  notes.push('Accuracy is measured on the datasets shown in Overview; fakes from generators unlike those can be missed, so "no manipulation detected" is not proof of authenticity.');
   box.append(element('small', notes.join(' ')));
 }
 $('media-file').addEventListener('change', () => {

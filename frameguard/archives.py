@@ -35,6 +35,183 @@ def grouped_splits(sources, pairs, seed=42):
             for index, group in enumerate(ordered) for source in group}
 
 
+def weighted_group_splits(groups, seed=42, fractions=(("train", 0.7), ("val", 0.15), ("test", 0.15))):
+    """Assign whole groups to splits so each split approaches its target share of every class.
+
+    groups: {group: count} or {group: (real_count, fake_count)}. Largest groups are placed first (seeded
+    order among equal sizes), each into the split whose per-class shortfall it fills best.
+    """
+    if len(groups) < len(fractions):
+        raise ValueError("Need at least one independent group per split")
+    counts = {key: value if isinstance(value, tuple) else (value,) for key, value in groups.items()}
+    totals = [sum(column) for column in zip(*counts.values())]
+    keys = sorted(counts)
+    random.Random(seed).shuffle(keys)
+    keys.sort(key=lambda key: -sum(counts[key]))
+    assigned, result = {name: [0] * len(totals) for name, _ in fractions}, {}
+
+    def shortfall(item, key):
+        name, share = item
+        return sum(c * (share * t - a) / t for c, t, a in zip(counts[key], totals, assigned[name]) if t)
+
+    for key in keys:
+        name = max(fractions, key=lambda item: shortfall(item, key))[0]
+        result[key] = name
+        assigned[name] = [a + c for a, c in zip(assigned[name], counts[key])]
+    return result
+
+
+def connected_groups(members):
+    """members: {video: [ids]}; returns {video: group root} where videos sharing any id are connected."""
+    parent = {}
+
+    def find(value):
+        parent.setdefault(value, value)
+        while parent[value] != value:
+            parent[value] = parent[parent[value]]
+            value = parent[value]
+        return value
+
+    for ids in members.values():
+        for first, second in zip(ids, ids[1:]):
+            parent[find(first)] = find(second)
+        for value in ids:
+            find(value)
+    return {video: find(ids[0]) for video, ids in members.items()}
+
+
+FFPP_TRAINED_METHODS = ("Deepfakes", "Face2Face", "FaceSwap", "NeuralTextures")
+
+
+def import_mixed(ffpp, celeb, dfdc, output, seed=42, holdout="FaceShifter", celeb_fakes=2500, dfdc_reals=3000):
+    """One pooled FF++ + Celeb-DF v2 + DFDC manifest with a 70/15/15 split per dataset by connected groups.
+
+    Groups: FF++ source videos (fakes join their two sources); Celeb-DF identities (fakes join both
+    identities; YouTube-real videos stand alone); DFDC original videos (fakes join their original).
+    The `holdout` FF++ method never enters train/val; only its fakes from test groups are kept, so it
+    measures an unseen manipulation method. Folders are used in place; ZIPs are extracted into `output`.
+    """
+    output = Path(output).resolve()
+    if output.exists():
+        raise ValueError("Use a new output directory; existing data will not be overwritten")
+    rng = random.Random(seed)
+    first, second = open_source(ffpp, "FaceForensics++_C23"), None
+    try:
+        second = open_source(celeb, "List_of_testing_videos.txt")
+        selected = []  # (source, name, dataset, video_id, ids, identity_ids, label, method)
+
+        prefix = "FaceForensics++_C23/"
+        listing = lambda folder: sorted(n for n in first.names if n.startswith(prefix + folder + "/") and n.endswith(".mp4"))
+        originals = listing("original")
+        if not originals:
+            raise ValueError("Expected FF++ folders FaceForensics++_C23/original/ and manipulation methods")
+        for name in originals:
+            selected.append((first, name, "FaceForensics++", f"original/{Path(name).stem}", [Path(name).stem], "", 0, None))
+        for method in FFPP_TRAINED_METHODS + ((holdout,) if holdout else ()):
+            names = listing(method)
+            if not names:
+                raise ValueError(f"FF++ method folder missing or empty: {method}")
+            for name in names:
+                pair = Path(name).stem.split("_")
+                if len(pair) != 2:
+                    raise ValueError(f"Unrecognised FF++ filename: {name}")
+                selected.append((first, name, "FaceForensics++", f"{method}/{Path(name).stem}", pair, "", 1, method))
+
+        celeb_real = sorted(n for n in second.names if n.split("/")[0] in {"Celeb-real", "YouTube-real"} and n.endswith(".mp4"))
+        synthesis = sorted(n for n in second.names if n.startswith("Celeb-synthesis/") and n.endswith(".mp4"))
+        if not celeb_real or not synthesis:
+            raise ValueError("Expected Celeb-DF folders Celeb-real/, YouTube-real/ and Celeb-synthesis/")
+        synthesis = sorted(rng.sample(synthesis, min(celeb_fakes, len(synthesis))))
+        for label, names in ((0, celeb_real), (1, synthesis)):
+            for name in names:
+                stem = Path(name).stem
+                identities = [part for part in stem.split("_") if part.startswith("id") and part[2:].isdigit()]
+                selected.append((second, name, "Celeb-DF-v2", name, identities or [f"youtube:{stem}"],
+                                 "|".join(identities), label, None))
+
+        selected += dfdc_selection(dfdc, rng, dfdc_reals)
+
+        # Split each dataset by connected groups, weighted by video count; the holdout method does not vote.
+        splits = {}
+        for dataset in sorted({row[2] for row in selected}):
+            rows = [row for row in selected if row[2] == dataset and row[7] != holdout]
+            roots = connected_groups({row[3]: [f"{dataset}:{value}" for value in row[4]] for row in rows})
+            labels = {row[3]: row[6] for row in rows}
+            sizes = {root: (0, 0) for root in roots.values()}
+            for key, root in roots.items():
+                real, fake = sizes[root]
+                sizes[root] = (real + (labels[key] == 0), fake + (labels[key] == 1))
+            group_split = weighted_group_splits(sizes, seed)
+            splits.update({key: group_split[root] for key, root in roots.items()})
+            for row in selected:
+                if row[2] == dataset and row[7] == holdout:
+                    source_splits = {splits.get(f"original/{value}") for value in row[4]}
+                    splits[row[3]] = "test" if source_splits == {"test"} else None
+
+        selected = [row for row in selected if splits[row[3]]]
+        required = sum(source.size(name) for source, name, *_ in selected if isinstance(source, ZipSource))
+        free_space_at = output.parent if output.parent.exists() else Path.cwd()
+        if required and shutil.disk_usage(free_space_at).free < required + 1024**3:
+            raise ValueError("Insufficient disk space for selected videos")
+        output.mkdir(parents=True)
+        manifest = []
+        for index, (source, name, dataset, video_id, ids, identities, label, _) in enumerate(selected):
+            path = source.video(name, output / dataset) if source is not None else Path(name)
+            manifest.append(dict(path=str(path), dataset=dataset, video_id=video_id,
+                                 source_ids="|".join(ids) if dataset != "Celeb-DF-v2" else Path(name).stem,
+                                 identity_ids=identities, label=label, split=splits[video_id]))
+            if (index + 1) % 1000 == 0:
+                print(f"Indexed {index + 1}/{len(selected)}", flush=True)
+        write_manifest(manifest, output / "manifest.csv")
+        inventory = {"seed": seed,
+                     "protocol": ("Pooled FF++ C23 + Celeb-DF v2 + DFDC; 70/15/15 split per dataset by connected source/identity "
+                                  "groups, weighted by video count. Not an official benchmark split."),
+                     "unseen_method": f"FF++ {holdout}: excluded from training; test-group fakes only" if holdout else None,
+                     "archives": [first.describe(), second.describe(), {"name": str(dfdc), "type": "folder"}],
+                     "selected_videos": len(manifest), "extracted_bytes": required,
+                     "splits": {split: {"real": sum(r["split"] == split and r["label"] == 0 for r in manifest),
+                                         "manipulated": sum(r["split"] == split and r["label"] == 1 for r in manifest)}
+                                for split in ("train", "val", "test")},
+                     "datasets": dict(Counter(r["dataset"] for r in manifest)),
+                     "by_dataset": {f"{d}/{s}": {"real": sum(r["dataset"] == d and r["split"] == s and r["label"] == 0 for r in manifest),
+                                                 "manipulated": sum(r["dataset"] == d and r["split"] == s and r["label"] == 1 for r in manifest)}
+                                    for d in sorted({r["dataset"] for r in manifest}) for s in ("train", "val", "test")},
+                     "verification": "ZIP members extracted with CRC checks; folder inputs used in place; video decoding not yet tested",
+                     "identity_limit": "FF++ source-disjoint; Celeb-DF identity-disjoint; DFDC original-disjoint (actor IDs unavailable)"}
+        (output / "inventory.json").write_text(json.dumps(inventory, indent=2), encoding="utf-8")
+        print(json.dumps(inventory, indent=2))
+        return manifest
+    finally:
+        first.close()
+        if second is not None:
+            second.close()
+
+
+def dfdc_selection(root, rng, reals=3000):
+    """DFDC training parts (folders holding metadata.json): up to `reals` real videos, each with one of its fakes."""
+    entries = {}
+    for meta in sorted(Path(root).rglob("metadata.json")):
+        for name, info in json.loads(meta.read_text(encoding="utf-8")).items():
+            if (meta.parent / name).is_file():
+                entries[name] = (meta.parent, info)
+    if not entries:
+        raise ValueError(f"No DFDC metadata.json with videos found under {root}")
+    fakes = {}
+    for name, (_, info) in sorted(entries.items()):
+        if info.get("label") == "FAKE" and info.get("original") in entries:
+            fakes.setdefault(info["original"], []).append(name)
+    originals = sorted(name for name, (_, info) in entries.items() if info.get("label") == "REAL")
+    originals = sorted(rng.sample(originals, min(reals, len(originals))))
+    rows = []
+    for name in originals:
+        group = Path(name).stem
+        chosen = [(name, 0)] + ([(rng.choice(fakes[name]), 1)] if name in fakes else [])
+        for video, label in chosen:
+            folder = entries[video][0]
+            rows.append((None, str((folder / video).resolve()), "DFDC", f"{folder.name}/{video}", [group], "", label, None))
+    return rows
+
+
 def extract_member(archive, name, root):
     relative = PurePosixPath(name)
     if relative.is_absolute() or ".." in relative.parts or "\\" in name or ":" in name:

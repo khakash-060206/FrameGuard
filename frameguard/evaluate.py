@@ -26,6 +26,31 @@ def spatial_window_predictions(dataset):
     return result
 
 
+FFPP = "FaceForensics++"
+
+
+def assign_domains(predictions, training_groups):
+    """Tag each prediction with the result groups it counts towards.
+
+    Each dataset; "All datasets" when several are present; and, when FF++ has several manipulation
+    methods, one group per method (that method's fakes plus all FF++ real videos). Fakes from a method
+    absent from training/validation count only towards their "(unseen method)" group, never the totals.
+    """
+    trained = {row["video_id"].split("/")[0] for row in training_groups if row["dataset"] == FFPP}
+    method = lambda p: p["video_id"].split("/")[0]
+    methods = sorted({method(p) for p in predictions if p["dataset"] == FFPP and p["label"] == 1})
+    name = lambda m: f"FF++ {m}" + ("" if m in trained else " (unseen method)")
+    several = len({p["dataset"] for p in predictions}) > 1
+    for p in predictions:
+        ffpp_method = method(p) if p["dataset"] == FFPP else None
+        unseen = p["label"] == 1 and ffpp_method is not None and ffpp_method not in trained
+        domains = [] if unseen else [p["dataset"]] + (["All datasets"] if several else [])
+        if ffpp_method and len(methods) > 1:
+            domains += [name(m) for m in methods] if p["label"] == 0 else [name(ffpp_method)]
+        p["domains"] = domains
+    return predictions
+
+
 def evaluate(folder, checkpoint, output, split="test", device="cpu", batch_size=8):
     if split not in {"test", "external"}:
         raise ValueError("Final evaluation accepts test or external only")
@@ -62,8 +87,11 @@ def evaluate(folder, checkpoint, output, split="test", device="cpu", batch_size=
                                           ("temporal", temporal, metadata["threshold_temporal"])):
         metrics[name] = {}
         curves[name] = {}
-        for domain in sorted({p["dataset"] for p in predictions}):
-            selected = [p for p in predictions if p["dataset"] == domain]
+        assign_domains(predictions, metadata["training_groups"])
+        for domain in sorted({d for p in predictions for d in p["domains"]}):
+            selected = [p for p in predictions if domain in p["domains"]]
+            if len({p["label"] for p in selected}) < 2:
+                continue  # ROC-AUC needs both classes
             metrics[name][domain] = classification_metrics([p["label"] for p in selected], [p["score"] for p in selected], threshold)
             curves[name][domain] = diagnostic_curves([p["label"] for p in selected], [p["score"] for p in selected])
     eligible = {p["video_id"] + "@" + p["dataset"] for p in temporal}

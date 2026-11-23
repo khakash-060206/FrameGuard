@@ -9,6 +9,12 @@ Usage (from the project folder):
 Stages: import datasets -> verify split -> prepare face crops -> train spatial CNN ->
 cache features -> train LSTM -> evaluate internal test -> evaluate Celeb-DF.
 
+Mixed protocol (pass --dfdc): FF++ C23 (4 trained methods; FaceShifter held out as an unseen method)
++ Celeb-DF v2 + DFDC pooled into one 70/15/15 split by connected source/identity groups. It writes
+runs/mixed-test.json with overall, per-dataset and per-method results, and has no separate external set:
+
+    python scripts/run_experiment.py --ffpp /kaggle/input/ff-c23 --celeb /kaggle/input/celeb-df-v2         --dfdc /kaggle/input/dfdc-10 --data-dir /tmp/fg --max-samples 64 --prep-workers 4 --augment on
+
 Datasets can be ZIP files (extracted into --data-dir) or already-extracted folders
 (used in place). Live state is written to runs/experiment-status.json. The runner stops
 at the first failed stage. With --resume, stages recorded as completed in that file are
@@ -40,6 +46,13 @@ def arguments():
                         help="FaceForensics++ C23 as a ZIP or folder (default: data/archive.zip)")
     parser.add_argument("--celeb", "--celeb-zip", dest="celeb", default="data/archive (1).zip",
                         help="Celeb-DF v2 as a ZIP or folder (default: 'data/archive (1).zip')")
+    parser.add_argument("--dfdc", default=None,
+                        help="DFDC training parts folder (contains metadata.json files). Enables the mixed protocol")
+    parser.add_argument("--celeb-fakes", type=int, default=2500, help="Mixed protocol: Celeb-DF fakes sampled (default: 2500)")
+    parser.add_argument("--dfdc-reals", type=int, default=3000,
+                        help="Mixed protocol: DFDC real videos sampled, each paired with one fake (default: 3000)")
+    parser.add_argument("--holdout", default="FaceShifter",
+                        help="Mixed protocol: FF++ method kept out of training and tested as unseen ('' = none)")
     parser.add_argument("--data-dir", default="data",
                         help="Where imported videos, face crops and features are written (default: data)")
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
@@ -50,6 +63,9 @@ def arguments():
     parser.add_argument("--frames-per-video", type=int, default=None,
                         help="Spatial training: crops drawn per training video per epoch. Default: all crops (~140/video)")
     parser.add_argument("--workers", type=int, default=0, help="DataLoader worker processes (default: 0)")
+    parser.add_argument("--prep-workers", type=int, default=1, help="Parallel face-preparation processes (default: 1)")
+    parser.add_argument("--augment", default="auto", choices=["auto", "on", "off"],
+                        help="Spatial training augmentation; auto = on for the mixed protocol only (default: auto)")
     parser.add_argument("--amp", default="auto", choices=["auto", "on", "off"],
                         help="float16 mixed precision; auto = on for CUDA (default: auto)")
     parser.add_argument("--threads", type=int, default=4, help="PyTorch CPU threads (default: 4)")
@@ -91,7 +107,7 @@ def main():
     import torch
     import cv2
     from frameguard.assets import ensure_assets
-    from frameguard.archives import import_archives
+    from frameguard.archives import import_archives, import_mixed
     from frameguard.prepare import prepare
     from frameguard.train import train
     from frameguard.data import cache_features
@@ -103,6 +119,8 @@ def main():
     if device == "cuda" and not torch.cuda.is_available():
         raise SystemExit("--device cuda requested but PyTorch cannot see a CUDA GPU. Use --device cpu.")
     amp = {"auto": None, "on": True, "off": False}[options.amp]
+    mixed = options.dfdc is not None
+    augment = mixed if options.augment == "auto" else options.augment == "on"
     if device == "cuda":
         torch.backends.cudnn.benchmark = True
         print(f"Using GPU: {torch.cuda.get_device_name(0)}", flush=True)
@@ -122,25 +140,38 @@ def main():
         if manifest.exists():
             print(f"{manifest} already exists; reusing it.", flush=True)
             return
-        for name in (options.ffpp, options.celeb):
+        for name in (options.ffpp, options.celeb) + ((options.dfdc,) if mixed else ()):
             if not Path(name).exists():
-                raise ValueError(f"Dataset not found: {name}. Pass its location with --ffpp / --celeb.")
-        import_archives(options.ffpp, options.celeb, str(imported), seed=42)
+                raise ValueError(f"Dataset not found: {name}. Pass its location with --ffpp / --celeb / --dfdc.")
+        if mixed:
+            import_mixed(options.ffpp, options.celeb, options.dfdc, str(imported), seed=42, holdout=options.holdout or None,
+                         celeb_fakes=options.celeb_fakes, dfdc_reals=options.dfdc_reals)
+        else:
+            import_archives(options.ffpp, options.celeb, str(imported), seed=42)
+
+    def check_split():
+        if mixed:
+            print(f"Mixed protocol: new pooled split written to {manifest} (no reference split to compare).", flush=True)
+        else:
+            verify_split(manifest, options.allow_split_mismatch)
 
     stages = [
         ("importing_datasets", import_data),
-        ("verifying_split", lambda: verify_split(manifest, options.allow_split_mismatch)),
-        ("preparing_faces", lambda: prepare(str(manifest), str(crops), DETECTOR, max_samples=options.max_samples)),
+        ("verifying_split", check_split),
+        ("preparing_faces", lambda: prepare(str(manifest), str(crops), DETECTOR, max_samples=options.max_samples,
+                                            workers=options.prep_workers)),
         ("training_spatial", lambda: train(str(crops), "models/spatial.pt", "spatial", epochs=epochs,
-                                           frames_per_video=options.frames_per_video, **common)),
+                                           frames_per_video=options.frames_per_video, augment=augment, **common)),
         ("caching_features", lambda: cache_features(str(crops), "models/spatial.pt", str(features), device=device)),
         ("training_temporal", lambda: train(str(features), "models/temporal.pt", "temporal", "models/spatial.pt",
                                             epochs=epochs, **common)),
-        ("evaluating_internal", lambda: evaluate(str(features), "models/temporal.pt", "runs/ffpp-test.json",
+        ("evaluating_internal", lambda: evaluate(str(features), "models/temporal.pt",
+                                                 "runs/mixed-test.json" if mixed else "runs/ffpp-test.json",
                                                  device=device, batch_size=batch)),
-        ("evaluating_external", lambda: evaluate(str(features), "models/temporal.pt", "runs/celeb-external.json",
-                                                 split="external", device=device, batch_size=batch)),
     ]
+    if not mixed:
+        stages.append(("evaluating_external", lambda: evaluate(str(features), "models/temporal.pt", "runs/celeb-external.json",
+                                                               split="external", device=device, batch_size=batch)))
 
     done = []
     if options.resume and STATUS.exists():
@@ -151,7 +182,8 @@ def main():
             print(f"Resuming: skipping completed stages {done}", flush=True)
 
     STATUS.parent.mkdir(exist_ok=True)
-    settings = {"device": device, "epochs_per_stage": epochs, "batch_size": batch, "max_samples": options.max_samples,
+    settings = {"protocol": "mixed" if mixed else "ffpp-deepfakes", "augment": augment,
+                "prep_workers": options.prep_workers, "device": device, "epochs_per_stage": epochs, "batch_size": batch, "max_samples": options.max_samples,
                 "frames_per_video": options.frames_per_video, "workers": options.workers, "amp": options.amp,
                 "data_dir": str(data)}
     status = {"pid": os.getpid(), **settings, "completed_stages": list(done)}

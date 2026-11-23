@@ -78,8 +78,8 @@ def video_frames(path, max_samples=None):
             raise ValueError("Video needs valid frame-rate metadata and at least 8 FPS")
         index, emitted, next_time, previous = 0, 0, 0.0, -1.0
         while True:
-            ok, frame = capture.read()
-            if not ok:
+            # grab() decodes without the colour conversion; retrieve() runs only for frames that are kept.
+            if not capture.grab():
                 break
             timestamp = capture.get(cv2.CAP_PROP_POS_MSEC) / 1000
             if not math.isfinite(timestamp) or timestamp <= previous:
@@ -91,6 +91,9 @@ def video_frames(path, max_samples=None):
             index += 1
             if timestamp + 1e-6 < next_time:
                 continue
+            ok, frame = capture.retrieve()
+            if not ok:
+                break
             yield timestamp, frame
             emitted += 1
             next_time = (math.floor(timestamp * SAMPLE_FPS + 1e-6) + 1) / SAMPLE_FPS

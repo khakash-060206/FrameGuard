@@ -97,18 +97,36 @@ There are two ways to train from scratch:
 
 | | Where | Rough time | You need |
 |---|---|---|---|
-| **A. Kaggle (recommended)** | Free Kaggle GPU (T4) | ~2 h (measured on a T4) | A phone-verified Kaggle account |
-| **B. Local** | Your Windows PC | ~4–7 h on an NVIDIA GPU, 2–3 days on a laptop CPU | ~80 GB free disk, the dataset ZIPs |
+| **A. Kaggle, mixed datasets (recommended)** | Free Kaggle GPU (T4) | ~6–8 h (estimate) | A phone-verified Kaggle account |
+| **B. Local, original FF++ Deepfakes protocol** | Your Windows PC | ~4–7 h on an NVIDIA GPU, 2–3 days on a laptop CPU | ~80 GB free disk, the dataset ZIPs |
 
-### A. Train on Kaggle
+### A. Train on Kaggle (mixed datasets)
+
+This run trains for generalisation. It pools three datasets into one leakage-checked split, adds training augmentation, and keeps one manipulation method out of training to test it as unseen:
+
+| Dataset (Kaggle) | Used | Role |
+|---|---|---|
+| `xdxd003/ff-c23` (FaceForensics++ C23) | 1,000 real; Deepfakes, Face2Face, FaceSwap, NeuralTextures | Train / val / test |
+| | FaceShifter (test-group fakes only) | **Unseen-method test** |
+| `reubensuju/celeb-df-v2` (Celeb-DF v2) | all 890 real, 2,500 sampled fakes | Train / val / test |
+| `pranay22077/dfdc-10` (DFDC parts 00–09) | 3,000 sampled real videos, each with one of its fakes | Train / val / test |
+
+- **Split:** 70/15/15 per dataset by connected groups, balanced per class. FF++ is grouped by source video, Celeb-DF by celebrity identity, and DFDC by original video. DFDC has no actor IDs, so the same actor can still appear in two different original videos.
+- **Excluded:** FF++ DeepFakeDetection, because its real videos are not in the dataset.
+- **Training changes:**
+  - 64 frames per video (~8 s)
+  - JPEG/blur/rescale/colour/flip augmentation
+  - sampling balanced across datasets and classes
+  - parallel face preparation
+- **Report:** results overall, per dataset and per FF++ method go to `runs/mixed-test.json`.
 
 1. On [kaggle.com](https://www.kaggle.com), create a notebook and import [`kaggle/frameguard-kaggle.ipynb`](kaggle/frameguard-kaggle.ipynb) (*File → Import Notebook*).
-2. *Add Input*: the datasets **`xdxd003/ff-c23`** (FaceForensics++ C23) and **`reubensuju/celeb-df-v2`** (Celeb-DF v2). They are mounted directly, so nothing has to be downloaded or uploaded.
-3. *Settings*: **Accelerator → GPU**, **Internet → On**.
-4. **Save Version → Save & Run All (Commit)**. The run continues with the browser closed (12-hour limit).
+2. *Add Input*: the three datasets above. They are mounted directly, so nothing has to be downloaded or uploaded.
+3. *Settings*: **Accelerator → GPU T4**, **Internet → On**.
+4. **Save Version → Save & Run All (Commit)**. The run continues with the browser closed (12-hour limit). Face preparation prints an ETA every 25 videos. If that ETA alone passes ~7 h, stop the run and lower `DFDC_REALS` in the first cell.
 5. When it finishes, download `frameguard-results.zip` from the version's **Output** tab and unzip it into your local project to view the results in the dashboard.
 
-The notebook clones this repository, installs MediaPipe, finds the datasets, picks a disk with room for the face crops, and runs the same experiment as below. Its fast settings are `--frames-per-video 32 --batch-size 32 --workers 4 --amp on`. It also checks the split against `splits/reference-split.csv`, so results stay comparable with a local run.
+The original single-method run (FF++ Deepfakes only, Celeb-DF test list as an unseen dataset) is still available. Run `scripts/run_experiment.py` without `--dfdc`; that is what produced the results in [Status](#status).
 
 ### B. Train locally
 
@@ -206,7 +224,7 @@ Each JSONL record holds per-face boxes, scores, threshold, mode (`spatial` or `t
 ### Tests
 
 ```powershell
-python -m unittest discover -s tests -v   # 39 tests
+python -m unittest discover -s tests -v   # 44 tests
 node tests/test_charts.cjs                # dashboard chart maths
 ```
 
@@ -242,11 +260,12 @@ tests/           unit tests (Python + Node)
 |---|---|
 | Data import, manifests, leakage checks | ✅ Done |
 | Face detection, tracking, cropping | ✅ Done (280,374 crops) |
-| Code, CLI, dashboard, tests | ✅ Done (39/39 tests passing) |
+| Code, CLI, dashboard, tests | ✅ Done (44/44 tests passing) |
 | Stage A: spatial CNN training | ✅ Done (5 epochs, best validation AUC at epoch 2) |
 | Stage B: LSTM training | ✅ Done (5 epochs, best validation AUC at epoch 1) |
 | Internal and Celeb-DF evaluation | ✅ Done |
-| Augmentation, calibration, joint fine-tuning, external detector comparison | 🔜 Planned |
+| Mixed-dataset generalisation run (FF++ 4 methods + Celeb-DF + DFDC, augmentation, unseen FaceShifter test) | ⏳ Ready to run on Kaggle |
+| Calibration, joint fine-tuning, external detector comparison | 🔜 Planned |
 
 ### Results
 

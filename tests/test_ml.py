@@ -25,6 +25,30 @@ class MLTests(unittest.TestCase):
         self.assertEqual(verdict([{"faces": [spatial]}])["mode"], "spatial")
         self.assertEqual(verdict([{"faces": []}])["label"], "unable_to_assess")
 
+    def test_augment_keeps_shape_and_type(self):
+        import random
+        import numpy as np
+        from frameguard.data import augment
+        crop = np.random.default_rng(0).integers(0, 256, (224, 224, 3), dtype=np.uint8)
+        for seed in range(20):
+            out = augment(crop, random.Random(seed))
+            self.assertEqual((out.shape, out.dtype), ((224, 224, 3), np.uint8))
+            self.assertTrue(out.flags["C_CONTIGUOUS"])
+        self.assertTrue(np.array_equal(augment(crop, random.Random(3)), augment(crop, random.Random(3))))
+
+    def test_domains_split_unseen_method_from_totals(self):
+        from frameguard.evaluate import assign_domains
+        trained = [{"dataset": "FaceForensics++", "video_id": v} for v in ("original/000", "Deepfakes/000_001")]
+        predictions = [{"dataset": "FaceForensics++", "video_id": "original/010", "label": 0},
+                       {"dataset": "FaceForensics++", "video_id": "Deepfakes/010_011", "label": 1},
+                       {"dataset": "FaceForensics++", "video_id": "FaceShifter/010_011", "label": 1},
+                       {"dataset": "DFDC", "video_id": "p/a.mp4", "label": 0}]
+        domains = [p["domains"] for p in assign_domains(predictions, trained)]
+        self.assertEqual(domains[0], ["FaceForensics++", "All datasets", "FF++ Deepfakes", "FF++ FaceShifter (unseen method)"])
+        self.assertEqual(domains[1], ["FaceForensics++", "All datasets", "FF++ Deepfakes"])
+        self.assertEqual(domains[2], ["FF++ FaceShifter (unseen method)"])
+        self.assertEqual(domains[3], ["DFDC", "All datasets"])
+
     def test_rgb_preprocessing(self):
         import numpy as np
         from frameguard.media import normalise

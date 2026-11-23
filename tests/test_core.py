@@ -226,3 +226,64 @@ class ImportTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class MixedImportTests(unittest.TestCase):
+    """Pooled FF++ + Celeb-DF + DFDC split: whole groups per split, unseen method only in test."""
+
+    def build(self, root):
+        ffpp, celeb, dfdc = root / "ffpp", root / "celeb", root / "dfdc"
+        files = [ffpp / f"FaceForensics++_C23/original/{i:03d}.mp4" for i in range(40)]
+        for method in ("Deepfakes", "Face2Face", "FaceSwap", "NeuralTextures", "FaceShifter", "DeepFakeDetection"):
+            files += [ffpp / f"FaceForensics++_C23/{method}/{i:03d}_{i + 1:03d}.mp4" for i in range(0, 40, 2)]
+        files += [celeb / f"Celeb-real/id{i}_000{j}.mp4" for i in range(12) for j in range(3)]
+        files += [celeb / f"YouTube-real/{i:05d}.mp4" for i in range(10)]
+        files += [celeb / f"Celeb-synthesis/id{i}_id{i + 1}_000{j}.mp4" for i in range(0, 12, 2) for j in range(4)]
+        metadata = {}
+        for i in range(30):
+            metadata[f"real{i}.mp4"] = {"label": "REAL", "split": "train", "original": None}
+            for j in range(2):
+                metadata[f"fake{i}_{j}.mp4"] = {"label": "FAKE", "split": "train", "original": f"real{i}.mp4"}
+        files += [dfdc / "dfdc_train_part_00/dfdc_train_part_0" / name for name in metadata]
+        for path in files:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"video")
+        (celeb / "List_of_testing_videos.txt").write_text("1 Celeb-real/id0_0000.mp4\n")
+        (dfdc / "dfdc_train_part_00/dfdc_train_part_0/metadata.json").write_text(json.dumps(metadata))
+        return ffpp, celeb, dfdc
+
+    def test_pooled_split_keeps_groups_together_and_holds_out_method(self):
+        from frameguard.archives import import_mixed
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            import_mixed(*self.build(root), root / "out", celeb_fakes=20, dfdc_reals=25)
+            rows = read_manifest(root / "out/manifest.csv")  # re-validates: no source/identity crosses splits
+            datasets = {r["dataset"] for r in rows}
+            self.assertEqual(datasets, {"FaceForensics++", "Celeb-DF-v2", "DFDC"})
+            for dataset in datasets:
+                for split in ("train", "val", "test"):  # both classes in every split of every dataset
+                    self.assertEqual({r["label"] for r in rows if r["dataset"] == dataset and r["split"] == split}, {0, 1})
+            shifter = [r for r in rows if r["video_id"].startswith("FaceShifter/")]
+            self.assertTrue(shifter)
+            self.assertEqual({r["split"] for r in shifter}, {"test"})
+            self.assertFalse([r for r in rows if r["video_id"].startswith("DeepFakeDetection/")])
+            self.assertEqual(sum(r["dataset"] == "Celeb-DF-v2" and r["label"] == 1 for r in rows), 20)
+            dfdc = [r for r in rows if r["dataset"] == "DFDC"]
+            self.assertEqual((sum(r["label"] == 0 for r in dfdc), sum(r["label"] == 1 for r in dfdc)), (25, 25))
+            originals = {r["video_id"]: r["split"] for r in rows if r["video_id"].startswith("original/")}
+            for r in shifter:
+                self.assertEqual({originals[f"original/{s}"] for s in r["source_ids"].split("|")}, {"test"})
+
+    def test_weighted_split_approaches_targets(self):
+        from frameguard.archives import weighted_group_splits
+        result = weighted_group_splits({f"g{i}": 1 for i in range(100)})
+        counts = {name: sum(1 for v in result.values() if v == name) for name in ("train", "val", "test")}
+        self.assertEqual(counts, {"train": 70, "val": 15, "test": 15})
+
+    def test_weighted_split_balances_each_class(self):
+        from frameguard.archives import weighted_group_splits
+        groups = {**{f"real{i}": (1, 0) for i in range(40)}, **{f"mixed{i}": (1, 3) for i in range(20)}}
+        result = weighted_group_splits(groups)
+        for split in ("val", "test"):
+            self.assertTrue(any(result[f"mixed{i}"] == split for i in range(20)))
+            self.assertTrue(any(result[f"real{i}"] == split for i in range(40)))

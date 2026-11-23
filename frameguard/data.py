@@ -4,7 +4,9 @@ from collections import Counter
 from dataclasses import asdict
 import json
 from pathlib import Path
+import random
 
+import cv2
 import numpy as np
 import torch
 from torch.utils.data import Dataset, WeightedRandomSampler
@@ -33,9 +35,35 @@ def read_index(folder, kind="crops"):
     return index
 
 
+def augment(crop, rng=random):
+    """Changes that re-shared media goes through: flips, rescaling, blur, colour shifts and JPEG re-compression.
+
+    `crop` is an RGB uint8 face crop. Python's `random` is reseeded per DataLoader worker, so workers differ.
+    """
+    if rng.random() < 0.5:
+        crop = crop[:, ::-1]
+    size = crop.shape[0]
+    if rng.random() < 0.3:
+        small = max(32, int(size * rng.uniform(0.35, 0.8)))
+        crop = cv2.resize(cv2.resize(crop, (small, small), interpolation=cv2.INTER_AREA), (size, size),
+                          interpolation=cv2.INTER_LINEAR)
+    if rng.random() < 0.25:
+        crop = cv2.GaussianBlur(crop, (0, 0), rng.uniform(0.4, 1.6))
+    if rng.random() < 0.5:
+        crop = cv2.convertScaleAbs(crop, alpha=rng.uniform(0.75, 1.25), beta=rng.uniform(-25, 25))
+    if rng.random() < 0.5:
+        ok, encoded = cv2.imencode(".jpg", cv2.cvtColor(np.ascontiguousarray(crop), cv2.COLOR_RGB2BGR),
+                                   [cv2.IMWRITE_JPEG_QUALITY, rng.randint(30, 90)])
+        if ok:
+            crop = cv2.cvtColor(cv2.imdecode(encoded, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+    return np.ascontiguousarray(crop)
+
+
 class Samples(Dataset):
-    def __init__(self, folder, split, temporal=False):
-        self.folder, self.temporal = Path(folder), temporal
+    def __init__(self, folder, split, temporal=False, augment=False):
+        if augment and temporal:
+            raise ValueError("Augmentation applies to spatial crops only; temporal training uses cached features")
+        self.folder, self.temporal, self.augment = Path(folder), temporal, augment
         self.index = read_index(folder, "features" if temporal else "crops")
         self.videos = [row for row in self.index["videos"] if row["split"] == split]
         self.samples = []
@@ -69,19 +97,24 @@ class Samples(Dataset):
         if self.temporal:
             value = torch.from_numpy(self.cached_data[selected].copy()).float()
         else:
-            value = normalise(self.cached_data[selected][None].copy())[0]
+            crop = self.cached_data[selected]
+            crop = augment(crop) if self.augment else crop.copy()
+            value = normalise(crop[None])[0]
         return value, torch.tensor(self.videos[video]["label"], dtype=torch.float32), video
 
     def balanced_sampler(self, num_samples=None):
-        """Class-balanced, then video-balanced sampling with replacement.
+        """Dataset-and-class balanced, then video-balanced sampling with replacement.
 
-        num_samples defaults to one draw per stored sample (the original epoch length).
+        Every (dataset, label) bucket gets an equal share of draws, so no source or class dominates;
+        with a single dataset this is plain class balancing. num_samples defaults to one draw per
+        stored sample (the original epoch length).
         """
         counts = Counter(video for video, _ in self.samples)
-        classes = Counter(self.videos[v]["label"] for v in counts)
-        if set(classes) != {0, 1}:
+        bucket = lambda v: (self.videos[v]["dataset"], self.videos[v]["label"])
+        buckets = Counter(bucket(v) for v in counts)
+        if {label for _, label in buckets} != {0, 1}:
             raise ValueError("Training requires videos from both classes")
-        weights = [1 / (counts[v] * classes[self.videos[v]["label"]]) for v, _ in self.samples]
+        weights = [1 / (counts[v] * buckets[bucket(v)]) for v, _ in self.samples]
         return WeightedRandomSampler(weights, num_samples or len(weights), replacement=True)
 
 
