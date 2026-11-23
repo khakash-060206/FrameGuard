@@ -15,6 +15,16 @@ class MLTests(unittest.TestCase):
         import torch
         torch.set_num_threads(2)
 
+    def test_verdict_uses_temporal_windows_like_evaluation(self):
+        from frameguard.infer import verdict
+        spatial = {"mode": "spatial", "score": 0.9, "threshold": 0.4}
+        window = lambda score: {"mode": "temporal", "score": score, "threshold": 0.2}
+        result = verdict([{"faces": [spatial]}, {"faces": [window(0.1), window(0.4)]}])
+        self.assertEqual((result["label"], result["mode"], result["units"], result["max_faces"]), ("manipulated", "temporal", 2, 2))
+        self.assertAlmostEqual(result["score"], 0.25)
+        self.assertEqual(verdict([{"faces": [spatial]}])["mode"], "spatial")
+        self.assertEqual(verdict([{"faces": []}])["label"], "unable_to_assess")
+
     def test_rgb_preprocessing(self):
         import numpy as np
         from frameguard.media import normalise

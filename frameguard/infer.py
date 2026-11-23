@@ -121,7 +121,23 @@ def webcam_frames(camera=0, duration=30):
         capture.release()
 
 
-def predict(source, checkpoint, detector_path, output, device="cpu", heatmaps=None, webcam=False, duration=30):
+def verdict(records):
+    """Media-level verdict scored like evaluation: mean of every temporal window score against the
+    validation-selected temporal threshold. Images and clips too short for a window fall back to the
+    mean spatial frame score against the spatial threshold."""
+    faces = [face for record in records for face in record["faces"]]
+    if not faces:
+        return {"label": "unable_to_assess", "mode": None, "score": None, "threshold": None, "units": 0, "max_faces": 0}
+    windows = [face for face in faces if face["mode"] == "temporal"]
+    used = windows or faces
+    score, threshold = float(np.mean([face["score"] for face in used])), used[0]["threshold"]
+    return {"label": "manipulated" if score >= threshold else "real", "mode": "temporal" if windows else "spatial",
+            "score": score, "threshold": threshold, "units": len(used),
+            "max_faces": max(len(record["faces"]) for record in records), "calibrated": False}
+
+
+def predict(source, checkpoint, detector_path, output, device="cpu", heatmaps=None, webcam=False, duration=30,
+            max_samples=None):
     output = Path(output)
     if output.exists():
         raise ValueError("Use a new output path to preserve previous predictions")
@@ -137,7 +153,7 @@ def predict(source, checkpoint, detector_path, output, device="cpu", heatmaps=No
             else:
                 if heatmaps:
                     raise ValueError("CLI heatmap export currently supports images only")
-                frames = webcam_frames(int(source), duration) if webcam else video_frames(source)
+                frames = webcam_frames(int(source), duration) if webcam else video_frames(source, max_samples)
                 try:
                     for timestamp, frame in frames:
                         stream.write(json.dumps(predictor.assess(frame, timestamp), allow_nan=False) + "\n")

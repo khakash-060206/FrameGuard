@@ -40,7 +40,7 @@
     svg.append(svgNode('title', {}, title));
     const left = 52, right = 480, top = 20, bottom = 216;
     const x = value => left + value / xMax * (right - left), y = value => bottom - value / yMax * (bottom - top);
-    const label = (value, max) => max <= 1 ? value.toFixed(1) : Number(value.toFixed(2)).toString();
+    const label = (value, max) => max <= 1 ? value.toFixed(2) : Number(value.toFixed(2)).toString();
     for (let i = 0; i <= 4; i++) {
       svg.append(svgNode('line', {x1: left, x2: right, y1: y(yMax * i / 4), y2: y(yMax * i / 4), stroke: '#e8edf0'}));
       svg.append(svgNode('text', {x: left - 10, y: y(yMax * i / 4) + 3, 'text-anchor': 'end', fill: '#84929b', 'font-size': 10}, label(yMax * i / 4, yMax)));

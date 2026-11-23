@@ -87,7 +87,9 @@ python -m frameguard dashboard          # http://127.0.0.1:8765
 python -m frameguard dashboard --export # offline snapshot in dashboard/index.html
 ```
 
-The dashboard needs only the Python standard library. It shows loss and accuracy histories, ROC and precision-recall curves, confusion matrices, score distributions, model comparisons, dataset partitions, per-video predictions, and JSON/SVG export. It refreshes every 15 seconds. Media upload and analysis unlock once trained weights exist. When no results exist, the charts stay empty; it never shows placeholder metrics.
+The dashboard needs only the Python standard library. It shows loss and accuracy histories, ROC and precision-recall curves, confusion matrices, score distributions, model comparisons, dataset partitions, per-video predictions, and JSON/SVG export. It refreshes every 15 seconds, and the overview compares in-domain and unseen-dataset results side by side. When no results exist, the charts stay empty; it never shows placeholder metrics.
+
+**Analyse media** unlocks once trained weights exist. Upload a JPG, PNG or MP4 and it returns a verdict scored exactly like the evaluation: the mean of every LSTM window score over the first 256 sampled frames (about 32 s), compared with the validation-selected threshold. It also shows per-face scores and a timeline of window scores against the threshold. On held-out videos, the dashboard's scores match the evaluation report's scores exactly.
 
 ## Run it
 
@@ -95,7 +97,7 @@ There are two ways to train from scratch:
 
 | | Where | Rough time | You need |
 |---|---|---|---|
-| **A. Kaggle (recommended)** | Free Kaggle GPU (T4 / P100) | ~2–4 h (estimate, not yet measured) | A phone-verified Kaggle account |
+| **A. Kaggle (recommended)** | Free Kaggle GPU (T4) | ~2 h (measured on a T4) | A phone-verified Kaggle account |
 | **B. Local** | Your Windows PC | ~4–7 h on an NVIDIA GPU, 2–3 days on a laptop CPU | ~80 GB free disk, the dataset ZIPs |
 
 ### A. Train on Kaggle
@@ -204,7 +206,7 @@ Each JSONL record holds per-face boxes, scores, threshold, mode (`spatial` or `t
 ### Tests
 
 ```powershell
-python -m unittest discover -s tests -v   # 38 tests
+python -m unittest discover -s tests -v   # 39 tests
 node tests/test_charts.cjs                # dashboard chart maths
 ```
 
@@ -240,13 +242,27 @@ tests/           unit tests (Python + Node)
 |---|---|
 | Data import, manifests, leakage checks | ✅ Done |
 | Face detection, tracking, cropping | ✅ Done (280,374 crops) |
-| Code, CLI, dashboard, tests | ✅ Done (38/38 tests passing) |
-| Stage A: spatial CNN training | ⏳ Started, no epoch completed yet |
-| Stage B: LSTM training | ⏳ Pending |
-| Internal and Celeb-DF evaluation | ⏳ Pending |
+| Code, CLI, dashboard, tests | ✅ Done (39/39 tests passing) |
+| Stage A: spatial CNN training | ✅ Done (5 epochs, best validation AUC at epoch 2) |
+| Stage B: LSTM training | ✅ Done (5 epochs, best validation AUC at epoch 1) |
+| Internal and Celeb-DF evaluation | ✅ Done |
 | Augmentation, calibration, joint fine-tuning, external detector comparison | 🔜 Planned |
 
-**No accuracy numbers are published yet.** This section will be updated with real results once evaluation finishes.
+### Results
+
+Full from-scratch run on a Kaggle Tesla T4: 256 sampled frames per video, 5 epochs per stage, batch 32, 32 crops per training video per epoch, mixed precision. It took about 2 hours, and the split matched `splits/reference-split.csv` exactly. Video-level metrics; thresholds were selected on FF++ validation data only.
+
+| Model | Test set | Videos | ROC-AUC | F1 | Precision | Recall | False-positive rate |
+|---|---|---|---|---|---|---|---|
+| CNN baseline | FF++ internal test | 231 | 0.998 | 0.983 | 0.991 | 0.974 | 0.009 |
+| **CNN + LSTM** | FF++ internal test | 231 | **0.999** | **0.987** | 0.991 | 0.983 | 0.009 |
+| CNN baseline | Celeb-DF v2 (unseen) | 453 | 0.684 | 0.099 | 0.800 | 0.053 | 0.027 |
+| **CNN + LSTM** | Celeb-DF v2 (unseen) | 453 | **0.715** | **0.293** | 0.883 | 0.176 | 0.046 |
+
+- **In-domain, the problem is close to solved.** Both models separate FF++ Deepfakes almost perfectly; validation AUC reached 1.0 by spatial epoch 2.
+- **The LSTM helps**, most on the unseen dataset (AUC +0.03, F1 0.10 → 0.29).
+- **Generalisation is the open problem.** On Celeb-DF the scores still rank fakes above real videos (AUC 0.72), but at the FF++ threshold only 18% of fakes are caught. A "real" verdict on media from an unseen generator is weak evidence.
+- 69 FF++ test videos and 65 Celeb-DF videos were not scored: they were rejected during face preparation (no usable face, or more than one face) or had no continuous 16-frame window.
 
 ## Honesty notes
 

@@ -19,6 +19,8 @@ function selectOptions(select, options, empty) {
   select.disabled = false; options.forEach(([value, label]) => select.append(new Option(label, value)));
   if (options.some(([value]) => value === previous)) select.value = previous;
 }
+// Internal test first, so the overview opens on the in-domain result rather than alphabetical order.
+function sortedReports() { return [...state.reports].sort((a, b) => (a.report.split === 'external') - (b.report.split === 'external')); }
 function currentReport() { return state.reports.find(r => r.name === $('report-select').value)?.report; }
 function currentMetrics() { return currentReport()?.metrics?.[$('model-select').value]?.[$('domain-select').value]; }
 function predictions(model = $('model-select').value) { return (currentReport()?.[`${model}_predictions`] || []).filter(p => p.dataset === $('domain-select').value); }
@@ -62,8 +64,24 @@ function overview() {
     const row = element('div', undefined, 'pipeline-step'), text = element('div', undefined, 'step-text'); text.append(element('strong', title), element('p', description));
     row.append(element('span', done ? '✓' : String(i + 1), `step-number${done ? ' done' : ''}`), text, element('span', done ? 'Recorded' : 'Pending', `badge ${done ? 'teal' : 'neutral'}`)); $('pipeline').append(row);
   });
+  generalisation();
   $('data-total').textContent = number(inventory?.selected_videos); $('overview-data').replaceChildren();
   for (const [name, count] of Object.entries(inventory?.datasets || {})) {const line = element('div', undefined, 'dataset-line'); line.append(element('span', name), element('b', number(count))); $('overview-data').append(line);}
+}
+function generalisation() {
+  const host = $('generalisation'); host.replaceChildren();
+  const cards = sortedReports().flatMap(r => Object.entries(r.report.metrics?.temporal || {}).map(([domain, m]) => ({domain, external: r.report.split === 'external', m})));
+  if (!cards.length) { host.append(element('p', 'Appears after the internal and external evaluations.', 'empty-copy')); return; }
+  for (const {domain, external, m} of cards) {
+    const card = element('div', undefined, `gap-card${external ? ' external' : ''}`);
+    card.append(element('span', external ? 'UNSEEN DATASET' : 'IN-DOMAIN TEST', 'eyebrow'), element('h3', domain));
+    [['ROC-AUC', m.roc_auc, decimal], ['Recall (fakes caught)', m.recall, percent], ['False-positive rate', m.false_positive_rate, percent]].forEach(([label, value, format]) => {
+      const row = element('div', undefined, 'gap-row'), bar = element('div', undefined, 'gap-bar'), fill = element('i');
+      fill.style.width = `${Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0)) * 100}%`; bar.append(fill);
+      row.append(element('span', label), bar, element('b', format(value))); card.append(row);
+    });
+    card.append(element('small', `${number(m.count)} assessed videos`, 'muted')); host.append(card);
+  }
 }
 function training() {
   const epochs = state.histories.find(h => h.name === $('history-select').value)?.epochs || [];
@@ -114,16 +132,19 @@ function datasets() {
   $('archive-list').replaceChildren(); for (const archive of data?.archives || []) {const row = element('div', undefined, 'archive-item'); row.append(element('span', archive.name), element('span', `${(archive.bytes / 1e9).toFixed(2)} GB`)); $('archive-list').append(row);}
 }
 function render() {
-  selectOptions($('report-select'), state.reports.map(r => [r.name, r.name]), 'No evaluations yet');
+  selectOptions($('report-select'), sortedReports().map(r => [r.name, r.name]), 'No evaluations yet');
   selectOptions($('history-select'), state.histories.map(h => [h.name, h.name]), 'No training runs yet');
   selectOptions($('domain-select'), Object.keys(currentReport()?.metrics?.temporal || {}).map(d => [d, d]), 'No evaluated dataset');
-  selectOptions($('checkpoint-select'), (state.checkpoints || []).map(c => [c, c]), 'No trained checkpoint');
+  // Full CNN + LSTM model first; the spatial-only checkpoint stays available as the baseline.
+  selectOptions($('checkpoint-select'), [...(state.checkpoints || [])].sort((a, b) => (b === 'temporal.pt') - (a === 'temporal.pt')).map(c => [c, c === 'temporal.pt' ? 'temporal.pt · CNN + LSTM (recommended)' : c === 'spatial.pt' ? 'spatial.pt · CNN baseline' : c]), 'No trained checkpoint');
   const missing = Object.entries(state.dependencies || {}).filter(([, ok]) => !ok).map(([name]) => name);
   $('notice').classList.toggle('ready', !!state.reports.length);
   $('notice').textContent = state.warnings?.length ? `Some result files could not be read: ${state.warnings.join(' · ')}` : missing.length ? `Local training needs the ML runtime. Missing: ${missing.join(', ')}. ${state.reports.length ? 'Saved reports are still available below.' : 'No evaluation metrics are available yet.'}` : !state.reports.length ? 'Ready to record experiments. Graphs populate from completed training and evaluation; no example scores are shown.' : 'Showing saved evaluation results. Thresholds are selected on validation data; external data is held out.';
   if (state.experiment) {
     const phases = {preparing_faces: 'Preparing face crops; training is queued next', training_spatial: 'Training the spatial CNN', caching_features: 'Caching CNN features for the LSTM', training_temporal: 'Training the temporal LSTM', evaluating_internal: 'Evaluating the internal test set', evaluating_external: 'Evaluating Celeb-DF', completed: 'Experiment completed', failed: 'Experiment stopped with an error'};
-    $('notice').textContent = `${phases[state.experiment.phase] || state.experiment.phase}. CPU execution. Last recorded: ${state.experiment.updated_at}. ${state.experiment.error || 'See runs/training.log for batch progress.'}`;
+    const e = state.experiment, when = new Date(e.updated_at);
+    const hardware = e.device ? ` on ${e.device === 'cuda' ? 'GPU' : 'CPU'}${e.amp === 'on' ? ' with mixed precision' : ''}` : '';
+    $('notice').textContent = `${phases[e.phase] || e.phase}${hardware}. Last recorded ${isNaN(when) ? e.updated_at : when.toLocaleString()}. ${e.error || (e.phase === 'completed' ? 'Thresholds were selected on validation data; Celeb-DF was held out.' : '')}`;
   }
   overview(); training(); evaluation(); datasets(); inferenceReady();
 }
@@ -147,11 +168,22 @@ function inferenceReady() {
   $('analyse').disabled = busy || !online || !state.can_predict || !$('media-file').files.length;
   if (!busy && !$('inference-results').dataset.complete) $('inference-status').textContent = !online ? 'Start the local dashboard server to analyse media.' : !state.can_predict ? 'Inference unlocks when dependencies, the face detector, and a trained checkpoint are available.' : 'Analysis stays local. Uploaded media is removed from the temporary folder when processing finishes.';
 }
+function showVerdict(v, maxFrames) {
+  const box = $('verdict'); box.replaceChildren(); box.hidden = !v; if (!v) return;
+  box.className = `verdict ${v.label}`;
+  box.append(element('strong', {manipulated: 'Likely manipulated', real: 'No manipulation detected', unable_to_assess: 'Unable to assess'}[v.label] || v.label));
+  if (Number.isFinite(v.score)) box.append(element('p', `Score ${decimal(v.score)} against threshold ${decimal(v.threshold)} · ${v.mode === 'temporal' ? `mean of ${v.units} LSTM windows, as in evaluation` : `mean of ${v.units} frame scores (no full 16-frame window)`}`));
+  const notes = [];
+  if (v.max_faces > 1) notes.push('More than one face appeared. The model was evaluated on single-face videos only.');
+  if (v.mode === 'temporal' && maxFrames) notes.push(`Only the first ${maxFrames} sampled frames (~${maxFrames / 8} s) are scored, matching the evaluated protocol.`);
+  notes.push('Reliable on FaceForensics++-style fakes; it misses most fakes from unseen generators (see Overview), so "no manipulation detected" is weak evidence.');
+  box.append(element('small', notes.join(' ')));
+}
 $('media-file').addEventListener('change', () => {
   if (mediaURL) URL.revokeObjectURL(mediaURL); $('media-preview').replaceChildren();
   const file = $('media-file').files[0]; $('file-name').textContent = file?.name || 'No file selected';
   if (file) {mediaURL = URL.createObjectURL(file); const preview = document.createElement(file.name.toLowerCase().endsWith('.mp4') ? 'video' : 'img'); preview.src = mediaURL; if (preview.tagName === 'VIDEO') preview.controls = true; else preview.alt = 'Selected image for analysis'; $('media-preview').append(preview);}
-  delete $('inference-results').dataset.complete; inferenceReady();
+  delete $('inference-results').dataset.complete; $('verdict').hidden = true; inferenceReady();
 });
 $('analyse').addEventListener('click', async () => {
   const file = $('media-file').files[0]; if (!file || !state.can_predict || busy) return;
@@ -160,12 +192,26 @@ $('analyse').addEventListener('click', async () => {
   try {
     const query = new URLSearchParams({name: file.name, checkpoint: $('checkpoint-select').value});
     const response = await fetch(`/api/predict?${query}`, {method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: file}); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Analysis failed');
-    const latest = new Map(), tracks = new Map();
-    for (const record of data.records) for (const face of record.faces) {latest.set(face.track_id, face); if (face.mode === 'temporal') {if (!tracks.has(face.track_id)) tracks.set(face.track_id, []); tracks.get(face.track_id).push([record.timestamp, face.score]);}}
-    table('inference-results', ['Face track', 'Latest mode', 'Score', 'Assessment', 'State'], [...latest.values()].map(f => [f.track_id, f.mode, decimal(f.score), f.label, f.state]));
-    $('inference-results').dataset.complete = 'true'; $('inference-status').textContent = latest.size ? `Analysis complete. ${latest.size} face tracks assessed. These scores are not a guarantee of authenticity.` : 'Unable to assess: no usable faces were detected.';
-    $('inference-chart').hidden = !tracks.size;
-    if (tracks.size) FGCharts.plot($('inference-chart'), [...tracks].map(([id, points]) => ({name: `Track ${id}`, points})), {title: 'Temporal manipulation score', xLabel: 'Seconds', yLabel: 'Score', xMax: Math.max(1, ...[...tracks.values()].flat().map(p => p[0]))});
+    showVerdict(data.verdict, data.max_frames);
+    const tracks = new Map();
+    for (const record of data.records) for (const face of record.faces) {
+      const track = tracks.get(face.track_id) || {frames: 0, windows: [], spatial: [], threshold: face.threshold};
+      track.frames++;
+      if (face.mode === 'temporal') { track.windows.push([record.timestamp, face.score]); track.threshold = face.threshold; } else track.spatial.push(face.score);
+      tracks.set(face.track_id, track);
+    }
+    const mean = values => values.reduce((a, b) => a + b, 0) / values.length;
+    table('inference-results', ['Face track', 'Frames', 'LSTM windows', 'Mean score', 'Threshold', 'Assessment'], [...tracks].map(([id, t]) => {
+      const score = t.windows.length ? mean(t.windows.map(p => p[1])) : mean(t.spatial);
+      return [`Face ${id}`, number(t.frames), t.windows.length ? number(t.windows.length) : '—', decimal(score), decimal(t.threshold), score >= t.threshold ? 'Manipulated' : 'Real'];
+    }));
+    $('inference-results').dataset.complete = 'true'; $('inference-status').textContent = tracks.size ? `Analysis complete. ${tracks.size} face track${tracks.size > 1 ? 's' : ''} assessed. A score is not a guarantee of authenticity.` : 'Unable to assess: no usable faces were detected.';
+    const timelines = [...tracks].filter(([, t]) => t.windows.length);
+    $('inference-chart').hidden = !timelines.length;
+    if (timelines.length) {
+      const xMax = Math.max(1, ...timelines.flatMap(([, t]) => t.windows.map(p => p[0])));
+      FGCharts.plot($('inference-chart'), [...timelines.map(([id, t]) => ({name: `Face ${id}`, points: t.windows})), {name: 'Decision threshold', points: [[0, timelines[0][1].threshold], [xMax, timelines[0][1].threshold]]}], {title: 'Manipulation score per LSTM window', xLabel: 'Seconds', yLabel: 'Score', xMax});
+    }
   } catch (error) { $('inference-status').textContent = error.message; }
   finally {busy = false; $('analyse').textContent = 'Analyse media'; $('analyse').disabled = !state.can_predict;}
 });

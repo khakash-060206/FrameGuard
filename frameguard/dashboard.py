@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import tempfile
@@ -12,6 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "dashboard"
 INFERENCE_LOCK = threading.Lock()
 MAX_UPLOAD = 200 * 1024 * 1024
+PROTOCOL_FRAMES = 256
 
 
 def snapshot(root=ROOT):
@@ -120,7 +122,7 @@ class Handler(BaseHTTPRequestHandler):
         if not INFERENCE_LOCK.acquire(blocking=False):
             return self.send_json(409, {"error": "An analysis is already running. Try again after it finishes."})
         try:
-            from .infer import predict
+            from .infer import predict, verdict
             cache = ROOT / ".cache/uploads"
             cache.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(dir=cache) as directory:
@@ -134,9 +136,12 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError("Incomplete upload")
                         stream.write(chunk)
                         remaining -= len(chunk)
-                predict(str(media), ROOT / "models" / checkpoint, ROOT / "models/blaze_face_short_range.tflite", result)
+                # Same 256-frame (32 s at 8 fps) budget as the evaluated protocol, so scores are comparable.
+                predict(str(media), ROOT / "models" / checkpoint, ROOT / "models/blaze_face_short_range.tflite", result,
+                        max_samples=PROTOCOL_FRAMES)
                 records = [json.loads(line) for line in result.read_text(encoding="utf-8").splitlines()]
-            self.send_json(200, {"records": records, "calibrated": False})
+            self.send_json(200, {"records": records, "verdict": verdict(records), "max_frames": PROTOCOL_FRAMES,
+                                 "calibrated": False})
         except (ValueError, OSError, RuntimeError, ImportError, KeyError) as error:
             self.send_json(400, {"error": str(error)})
         finally:
@@ -148,6 +153,8 @@ def serve(port=8765, export=False):
     if export:
         print(f"Dashboard snapshot: {path.parent / 'index.html'}")
         return
+    # On Windows, SO_REUSEADDR lets a second server bind the same port and silently split requests with a stale one.
+    ThreadingHTTPServer.allow_reuse_address = os.name != "nt"
     with ThreadingHTTPServer(("127.0.0.1", port), Handler) as server:
         print(f"FrameGuard dashboard: http://127.0.0.1:{server.server_port}", flush=True)
         try:
