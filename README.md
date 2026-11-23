@@ -167,7 +167,7 @@ tests/           unit tests (Python + Node)
 | Data import, manifests, leakage checks | ✅ Done |
 | Face detection, tracking, cropping | ✅ Done (280,374 crops) |
 | Code, CLI, dashboard, tests | ✅ Done (35/35 tests passing) |
-| Stage A: spatial CNN training | ⏳ In progress |
+| Stage A: spatial CNN training | ⏳ Started, no epoch completed yet |
 | Stage B: LSTM training | ⏳ Pending |
 | Internal and Celeb-DF evaluation | ⏳ Pending |
 | Augmentation, calibration, joint fine-tuning, external detector comparison | 🔜 Planned |
