@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+data/
+models/
+runs/
+.cache/
+*.partial
+dashboard/data.js
+
+docs/
+STATUS.md
+problem statement.txt
+*.zip

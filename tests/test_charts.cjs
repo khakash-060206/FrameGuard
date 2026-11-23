@@ -1,0 +1,15 @@
+const assert = require('node:assert/strict');
+const {curves, histogram} = require('../dashboard/charts.js');
+const perfect = [{label: 0, score: .1}, {label: 0, score: .2}, {label: 1, score: .8}, {label: 1, score: .9}];
+assert.equal(curves(perfect).ap, 1);
+assert.deepEqual(curves(perfect).roc.at(-1), [1, 1]);
+const tied = curves([{label: 0, score: .5}, {label: 1, score: .5}]);
+assert.deepEqual(tied.roc, [[0, 0], [1, 1]]);
+assert.equal(tied.ap, .5);
+assert.equal(curves([]), null);
+assert.equal(curves([{label: 0, score: .1}]), null);
+assert.equal(histogram([{label: 1, score: 1}])[9].fake, 1);
+assert.equal(histogram([{label: 0, score: 0}])[0].real, 1);
+assert.equal(histogram([{label: 0, score: NaN}]).reduce((n, b) => n + b.real, 0), 0);
+assert.equal(curves([...perfect, {label: 1, score: NaN}]).ap, 1);
+console.log('Chart calculations passed: perfect ranking, ties, single-class, empty, score boundaries, invalid inputs.');

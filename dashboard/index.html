@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FrameGuard · Experiment Lab</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="data.js" defer></script><script src="charts.js" defer></script><script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to results</a>
+  <aside class="sidebar">
+    <a class="brand" href="#overview"><span class="brand-mark">F<span>G</span></span><span>FrameGuard<small>EXPERIMENT LAB</small></span></a>
+    <div class="nav-label">WORKSPACE</div>
+    <nav aria-label="Main navigation">
+      <a href="#overview" class="active" data-page="overview"><span>◫</span> Overview</a>
+      <a href="#training" data-page="training"><span>↗</span> Training history</a>
+      <a href="#evaluation" data-page="evaluation"><span>◎</span> Evaluation</a>
+      <a href="#datasets" data-page="datasets"><span>▤</span> Datasets</a>
+      <a href="#inspect" data-page="inspect"><span>⌕</span> Analyse media</a>
+    </nav>
+    <div class="sidebar-note"><span class="tiny-dot"></span> LOCAL WORKSPACE<p>Your datasets and results<br>stay on this computer.</p></div>
+    <div class="model-note"><span>ARCHITECTURE</span><strong>EfficientNet-B0 + LSTM</strong><small>Spatial features. Temporal context.</small></div>
+  </aside>
+  <div class="shell">
+    <header class="topbar"><div><span class="breadcrumb">Research workspace</span><span class="slash">/</span><span id="page-crumb">Overview</span></div><div class="top-actions"><span id="connection" class="badge neutral">Local snapshot</span><button id="refresh" class="button light">↻ Refresh</button></div></header>
+    <main id="main">
+      <div class="page-heading"><div><div class="eyebrow">FRAMEGUARD / MODEL DEVELOPMENT</div><h1 id="page-title">The experiment, at a glance.</h1><p id="page-subtitle">From training signals to held-out performance. Every number backed by a saved result.</p></div><button id="export" class="button primary">↓ Export results</button></div>
+      <div id="notice" class="notice" role="status" aria-live="polite"></div>
+
+      <section id="overview" class="page">
+        <div class="section-label"><h2>Evaluation snapshot</h2><span id="overview-context" class="muted">No evaluation selected</span></div>
+        <div id="kpis" class="kpi-grid"></div>
+        <div class="overview-grid">
+          <article class="panel"><div class="panel-head"><div><span class="eyebrow">EXPERIMENT PROGRESS</span><h2>A clear path to a tested model</h2></div><span class="badge neutral" id="progress-count"></span></div><div id="pipeline" class="pipeline"></div></article>
+          <article class="panel dataset-card"><span class="eyebrow">DATA FOUNDATION</span><h2 id="data-total">—</h2><p>videos selected for this experiment</p><div id="overview-data"></div><a href="#datasets" class="text-link">Explore dataset splits <span>↗</span></a></article>
+        </div>
+        <div class="panel"><div class="panel-head"><div><span class="eyebrow">SPATIAL VS. TEMPORAL</span><h2>Does sequence context help?</h2></div><a href="#evaluation" class="text-link">Full evaluation ↗</a></div><div id="overview-comparison"></div></div>
+      </section>
+
+      <section id="training" class="page" hidden>
+        <div class="filters"><label>Training run<select id="history-select"></select></label><span id="history-summary" class="muted"></span></div>
+        <div class="chart-grid">
+          <article class="panel"><div class="panel-head"><div><span class="eyebrow">OPTIMISATION</span><h2>Loss over epochs</h2></div><button class="icon-button" data-save-chart aria-label="Download loss chart">↓ SVG</button></div><div id="loss-chart" class="chart"></div><p class="chart-note">Binary cross-entropy on sampled frames or windows.</p></article>
+          <article class="panel"><div class="panel-head"><div><span class="eyebrow">CLASSIFICATION</span><h2>Accuracy over epochs</h2></div><button class="icon-button" data-save-chart aria-label="Download accuracy chart">↓ SVG</button></div><div id="accuracy-chart" class="chart"></div><p class="chart-note">Train: sampled units at 0.5. Validation: videos at each epoch's selected threshold. These are different evaluation units.</p></article>
+          <article class="panel"><div class="panel-head"><div><span class="eyebrow">RANKING QUALITY</span><h2>Validation ROC-AUC</h2></div><button class="icon-button" data-save-chart aria-label="Download AUC chart">↓ SVG</button></div><div id="auc-chart" class="chart"></div></article>
+          <article class="panel"><div class="panel-head"><div><span class="eyebrow">VALIDATION</span><h2>Precision, recall & F1</h2></div><button class="icon-button" data-save-chart aria-label="Download validation metrics chart">↓ SVG</button></div><div id="validation-chart" class="chart"></div></article>
+        </div>
+        <article class="panel"><div class="panel-head"><h2>Epoch log</h2><span class="muted">Saved by the training pipeline</span></div><div id="epoch-table" class="table-wrap"></div></article>
+      </section>
+
+      <section id="evaluation" class="page" hidden>
+        <div class="filters"><label>Evaluation report<select id="report-select"></select></label><label>Dataset<select id="domain-select"></select></label><label>Model<select id="model-select"><option value="temporal">CNN + LSTM</option><option value="spatial">CNN baseline</option></select></label><span id="eval-context" class="badge neutral">Video-level</span></div>
+        <div id="eval-kpis" class="kpi-grid"></div>
+        <div class="chart-grid">
+          <article class="panel"><div class="panel-head"><div><span class="eyebrow">DISCRIMINATION</span><h2>ROC curve</h2></div><button class="icon-button" data-save-chart aria-label="Download ROC chart">↓ SVG</button></div><div id="roc-chart" class="chart"></div><p class="chart-note">True-positive rate against false-positive rate. Dashed line: chance ranking.</p></article>
+          <article class="panel"><div class="panel-head"><div><span class="eyebrow">POSITIVE CLASS: MANIPULATED</span><h2>Precision–recall curve</h2></div><button class="icon-button" data-save-chart aria-label="Download precision recall chart">↓ SVG</button></div><div id="pr-chart" class="chart"></div><p id="pr-note" class="chart-note">Threshold-independent view of detection trade-offs.</p></article>
+          <article class="panel"><div class="panel-head"><div><span class="eyebrow">OPERATING POINT</span><h2>Confusion matrix</h2></div><span id="threshold" class="badge neutral">Threshold —</span></div><div id="confusion"></div><p class="chart-note">Rows: actual class. Columns: predicted class. Threshold selected using validation data.</p></article>
+          <article class="panel"><div class="panel-head"><div><span class="eyebrow">SCORE SEPARATION</span><h2>Manipulation score distribution</h2></div><button class="icon-button" data-save-chart aria-label="Download score distribution">↓ SVG</button></div><div id="distribution" class="chart"></div><p class="chart-note">Video scores are model outputs, not calibrated probabilities.</p></article>
+        </div>
+        <article class="panel"><div class="panel-head"><h2>Model comparison</h2><span class="muted">Same eligible videos and temporal windows</span></div><div id="comparison" class="table-wrap"></div></article>
+        <article class="panel"><div class="panel-head"><h2>Video-level predictions</h2><label class="search-label"><span class="sr-only">Filter video predictions</span><input id="prediction-search" type="search" placeholder="Search video ID…"></label></div><div id="prediction-table" class="table-wrap"></div><button id="more-predictions" class="button light" hidden>Show more videos</button><p id="exclusions" class="chart-note"></p></article>
+      </section>
+
+      <section id="datasets" class="page" hidden>
+        <article class="panel"><div class="panel-head"><div><span class="eyebrow">EXPERIMENT INPUTS</span><h2>Training and evaluation splits</h2></div><span class="badge teal">Source-group checks</span></div><div id="split-chart" class="chart"></div><div id="split-table" class="table-wrap"></div></article>
+        <div class="overview-grid"><article class="panel"><h2>Split protocol</h2><p id="protocol" class="body-copy"></p><p class="body-copy">Related original and manipulated source videos stay in the same split. Celeb-DF is held out for external evaluation; it never selects training thresholds.</p><div class="callout">Source separation does not establish identity separation when identity metadata is absent.</div></article><article class="panel"><h2>Data verification</h2><p id="data-verification" class="body-copy"></p><div id="archive-list"></div></article></div>
+      </section>
+
+      <section id="inspect" class="page" hidden>
+        <div class="overview-grid"><article class="panel"><span class="eyebrow">LOCAL INFERENCE</span><h2>Inspect an image or video</h2><p class="body-copy">Analyse each detected face using your trained FrameGuard checkpoint.</p><label class="upload"><span class="upload-icon">↑</span><strong>Select media</strong><span>JPG, PNG or MP4 · up to 200 MB</span><input id="media-file" type="file" accept=".jpg,.jpeg,.png,.mp4"></label><label class="checkpoint-label">Checkpoint<select id="checkpoint-select"></select></label><button id="analyse" class="button primary wide" disabled>Analyse media</button><p id="inference-status" class="body-copy" role="status" aria-live="polite"></p></article><article class="panel"><div class="panel-head"><h2>Media preview</h2><span id="file-name" class="muted">No file selected</span></div><div id="media-preview" class="media-preview"><span>Your selected media appears here.</span></div></article></div>
+        <article class="panel"><div class="panel-head"><h2>Face assessments</h2><span class="muted">Scores are not calibrated probabilities</span></div><div id="inference-results" class="table-wrap"><p class="empty-copy">Choose media and a trained model to start an assessment.</p></div><div id="inference-chart" class="chart" hidden></div></article>
+      </section>
+      <footer><span>FrameGuard <b> / </b> Research prototype</span><span id="updated">No evaluation metrics are fabricated.</span></footer>
+    </main>
+  </div>
+</body>
+</html>
