@@ -23,7 +23,7 @@ def normalise(crops):
 class FaceDetector:
     def __init__(self, model_path):
         if not Path(model_path).is_file():
-            raise ValueError(f"Missing MediaPipe face detection asset: {model_path}. See docs/RUNBOOK.md.")
+            raise ValueError(f"Missing MediaPipe face detection asset: {model_path}. Run setup.ps1 to download it.")
         import mediapipe as mp
         from mediapipe.tasks import python
         from mediapipe.tasks.python import vision

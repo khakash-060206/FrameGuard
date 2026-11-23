@@ -67,7 +67,7 @@ Training runs in two stages, so the temporal model can be compared fairly agains
 - **Face preparation is complete:** 2,136 videos accepted, 382 rejected (372 with multiple faces, 10 with no usable face), 280,374 face crops. Videos with more than one face are excluded from training, because a video-level label cannot say which face was manipulated.
 - Crops are stored as memory-mapped `.npy` arrays, so the training loader can read random frames without decompressing whole videos.
 
-Datasets are **not** included in this repository. Obtain FaceForensics++ and Celeb-DF v2 under their own terms.
+Datasets are **not** included in this repository. Obtain FaceForensics++ and Celeb-DF v2 under their own terms; see [Add the datasets](#2-add-the-datasets) for the expected ZIP layout.
 
 ## Evaluation
 
@@ -91,35 +91,72 @@ The dashboard needs only the Python standard library. It shows loss and accuracy
 
 ## Run it
 
-Tested with Python 3.13 on Windows (PyTorch, torchvision, OpenCV, MediaPipe, scikit-learn). A CUDA GPU is optional; pass `--device cuda` with a CUDA build of PyTorch.
+Windows 10/11. An NVIDIA GPU is optional but strongly recommended: on a laptop CPU, one spatial epoch takes about 4 hours.
+
+### 1. Set up the environment (one command)
 
 ```powershell
-# 1. Environment
-python -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt   # exact versions: requirements.lock.txt
+git clone https://github.com/khakash-060206/FrameGuard.git
+cd FrameGuard
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+```
 
-# 2. Model assets: MediaPipe face detector + ImageNet EfficientNet-B0 (hash-checked)
-.\setup-training-assets.ps1
+`setup.ps1` does everything on a fresh machine:
 
-# 3. Import datasets and build the leakage-checked manifest
+- installs Python 3.13 for the current user with winget if it is missing
+- creates `.venv`
+- installs a **CUDA build of PyTorch if an NVIDIA GPU is detected**, otherwise the CPU build
+- installs all other packages at the exact versions in `requirements.lock.txt`
+- downloads the MediaPipe face detector and ImageNet EfficientNet-B0 weights and checks their SHA-256 hashes
+- verifies imports, the GPU, and a model forward pass, then runs the unit tests
+
+Options: `-Cpu` forces the CPU build, `-CudaIndex cu130` picks another CUDA wheel index (the default `cu126` needs NVIDIA driver 528 or newer), and `-SkipTests` skips the tests.
+
+### 2. Add the datasets
+
+Put two ZIP files in `data/`:
+
+| File | Contents FrameGuard reads | Size |
+|---|---|---|
+| `data/archive.zip` | FaceForensics++ C23: `FaceForensics++_C23/original/*.mp4` and `FaceForensics++_C23/Deepfakes/*.mp4` (other folders are ignored) | ~17.9 GB |
+| `data/archive (1).zip` | Celeb-DF v2: `List_of_testing_videos.txt` at the ZIP root, plus `Celeb-real/`, `Celeb-synthesis/`, `YouTube-real/` | ~10.0 GB |
+
+Other file names work with `--ffpp-zip` and `--celeb-zip`. Allow about **80 GB of free disk**: 28 GB of ZIPs, 4.5 GB of extracted videos, 40 GB of face crops, plus features.
+
+The train/validation/test split is rebuilt from the ZIP contents with seed 42. `splits/reference-split.csv` records the split from the original run, and the runner stops if the new split differs, which usually means a different dataset version.
+
+### 3. Run the full experiment
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_experiment.py --device auto
+```
+
+This runs every stage in order: import → verify split → face crops → spatial CNN → feature cache → LSTM → internal and Celeb-DF evaluation. Live state is in `runs/experiment-status.json`, and the runner stops at the first failed stage. Use `--epochs`, `--batch-size` and `--device cpu|cuda` to change the defaults (5, 8, auto). Keep the laptop plugged in and awake: checkpoints are only saved at the end of each epoch.
+
+Results land in `models/spatial.pt`, `models/temporal.pt` (with `.history.json` training logs) and `runs/ffpp-test.json`, `runs/celeb-external.json`. Open them with `python -m frameguard dashboard`.
+
+### Running stages by hand
+
+```powershell
+# Import datasets and build the leakage-checked manifest
 python -m frameguard import-archives data/archive.zip "data/archive (1).zip" data/imported --seed 42
 
-# 4. Detect, track and crop faces (up to 256 sampled frames per video)
+# Detect, track and crop faces (up to 256 sampled frames per video)
 python -m frameguard prepare data/imported/manifest.csv data/crops --detector models/blaze_face_short_range.tflite --max-samples 256
 
-# 5. Stage A: spatial CNN
+# Stage A: spatial CNN
 python -m frameguard train spatial data/crops models/spatial.pt --epochs 5 --batch-size 8
 
-# 6. Stage B: cache features, then train the LSTM
+# Stage B: cache features, then train the LSTM
 python -m frameguard cache-features data/crops models/spatial.pt data/features
 python -m frameguard train temporal data/features models/temporal.pt --checkpoint models/spatial.pt --epochs 5
 
-# 7. Evaluate on the internal test split and on Celeb-DF
+# Evaluate on the internal test split and on Celeb-DF
 python -m frameguard evaluate data/features models/temporal.pt runs/ffpp-test.json --split test
 python -m frameguard evaluate data/features models/temporal.pt runs/celeb-external.json --split external
 ```
 
-`scripts/run_experiment.py` runs steps 4–7 as one supervised job. It writes live state to `runs/experiment-status.json` and stops at the first failed stage.
+Add `--device cuda` to `train`, `cache-features` and `evaluate` to use the GPU.
 
 ### Inference
 
@@ -156,7 +193,9 @@ frameguard/
   infer.py       image / video / webcam prediction and Grad-CAM
   dashboard.py   local results server
 dashboard/       static HTML/CSS/JS dashboard and chart maths
-scripts/         end-to-end experiment runner
+scripts/         end-to-end experiment runner (run_experiment.py)
+splits/          reference train/val/test split from the original run
+setup.ps1        one-step environment setup for a fresh Windows machine
 tests/           unit tests (Python + Node)
 ```
 
