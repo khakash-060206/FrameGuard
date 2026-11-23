@@ -72,13 +72,17 @@ class Samples(Dataset):
             value = normalise(self.cached_data[selected][None].copy())[0]
         return value, torch.tensor(self.videos[video]["label"], dtype=torch.float32), video
 
-    def balanced_sampler(self):
+    def balanced_sampler(self, num_samples=None):
+        """Class-balanced, then video-balanced sampling with replacement.
+
+        num_samples defaults to one draw per stored sample (the original epoch length).
+        """
         counts = Counter(video for video, _ in self.samples)
         classes = Counter(self.videos[v]["label"] for v in counts)
         if set(classes) != {0, 1}:
             raise ValueError("Training requires videos from both classes")
         weights = [1 / (counts[v] * classes[self.videos[v]["label"]]) for v, _ in self.samples]
-        return WeightedRandomSampler(weights, len(weights), replacement=True)
+        return WeightedRandomSampler(weights, num_samples or len(weights), replacement=True)
 
 
 def cache_features(folder, checkpoint, output, device="cpu"):

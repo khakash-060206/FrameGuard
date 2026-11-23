@@ -91,9 +91,28 @@ The dashboard needs only the Python standard library. It shows loss and accuracy
 
 ## Run it
 
+There are two ways to train from scratch:
+
+| | Where | Rough time | You need |
+|---|---|---|---|
+| **A. Kaggle (recommended)** | Free Kaggle GPU (T4 / P100) | ~2–4 h (estimate, not yet measured) | A phone-verified Kaggle account |
+| **B. Local** | Your Windows PC | ~4–7 h on an NVIDIA GPU, 2–3 days on a laptop CPU | ~80 GB free disk, the dataset ZIPs |
+
+### A. Train on Kaggle
+
+1. On [kaggle.com](https://www.kaggle.com), create a notebook and import [`kaggle/frameguard-kaggle.ipynb`](kaggle/frameguard-kaggle.ipynb) (*File → Import Notebook*).
+2. *Add Input*: the datasets **`xdxd003/ff-c23`** (FaceForensics++ C23) and **`reubensuju/celeb-df-v2`** (Celeb-DF v2). They are mounted directly, so nothing has to be downloaded or uploaded.
+3. *Settings*: **Accelerator → GPU**, **Internet → On**.
+4. **Save Version → Save & Run All (Commit)**. The run continues with the browser closed (12-hour limit).
+5. When it finishes, download `frameguard-results.zip` from the version's **Output** tab and unzip it into your local project to view the results in the dashboard.
+
+The notebook clones this repository, installs MediaPipe, finds the datasets, picks a disk with room for the face crops, and runs the same experiment as below. Its fast settings are `--frames-per-video 32 --batch-size 32 --workers 4 --amp on`. It also checks the split against `splits/reference-split.csv`, so results stay comparable with a local run.
+
+### B. Train locally
+
 Windows 10/11. An NVIDIA GPU is optional but strongly recommended: on a laptop CPU, one spatial epoch takes about 4 hours.
 
-### 1. Set up the environment (one command)
+#### 1. Set up the environment (one command)
 
 ```powershell
 git clone https://github.com/khakash-060206/FrameGuard.git
@@ -112,7 +131,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 
 Options: `-Cpu` forces the CPU build, `-CudaIndex cu130` picks another CUDA wheel index (the default `cu126` needs NVIDIA driver 528 or newer), and `-SkipTests` skips the tests.
 
-### 2. Add the datasets
+#### 2. Add the datasets
 
 Put two ZIP files in `data/`:
 
@@ -121,17 +140,31 @@ Put two ZIP files in `data/`:
 | `data/archive.zip` | FaceForensics++ C23: `FaceForensics++_C23/original/*.mp4` and `FaceForensics++_C23/Deepfakes/*.mp4` (other folders are ignored) | ~17.9 GB |
 | `data/archive (1).zip` | Celeb-DF v2: `List_of_testing_videos.txt` at the ZIP root, plus `Celeb-real/`, `Celeb-synthesis/`, `YouTube-real/` | ~10.0 GB |
 
-Other file names work with `--ffpp-zip` and `--celeb-zip`. Allow about **80 GB of free disk**: 28 GB of ZIPs, 4.5 GB of extracted videos, 40 GB of face crops, plus features.
+Other locations work with `--ffpp` and `--celeb`, which also accept already-extracted folders (used in place, without copying). Allow about **80 GB of free disk**: 28 GB of ZIPs, 4.5 GB of extracted videos, 40 GB of face crops, plus features.
 
 The train/validation/test split is rebuilt from the ZIP contents with seed 42. `splits/reference-split.csv` records the split from the original run, and the runner stops if the new split differs, which usually means a different dataset version.
 
-### 3. Run the full experiment
+#### 3. Run the full experiment
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_experiment.py --device auto
 ```
 
-This runs every stage in order: import → verify split → face crops → spatial CNN → feature cache → LSTM → internal and Celeb-DF evaluation. Live state is in `runs/experiment-status.json`, and the runner stops at the first failed stage. Use `--epochs`, `--batch-size` and `--device cpu|cuda` to change the defaults (5, 8, auto). Keep the laptop plugged in and awake: checkpoints are only saved at the end of each epoch.
+This runs every stage in order: import → verify split → face crops → spatial CNN → feature cache → LSTM → internal and Celeb-DF evaluation. Live state is in `runs/experiment-status.json`, and the runner stops at the first failed stage. Keep the laptop plugged in and awake: checkpoints are only saved at the end of each epoch.
+
+| Option | Default | What it does |
+|---|---|---|
+| `--device auto\|cuda\|cpu` | `auto` | Where to train |
+| `--epochs N` | 5 | Epochs for each training stage |
+| `--batch-size N` | 8 | Use 32 on a GPU |
+| `--frames-per-video N` | all crops | Spatial training draws N crops per video per epoch instead of every crop (~140 per video). `32` makes each epoch ~4× shorter |
+| `--workers N` | 0 | Parallel data-loading processes; `4` keeps a GPU busy |
+| `--amp auto\|on\|off` | `auto` | float16 mixed precision, on by default for CUDA |
+| `--max-samples N` | 256 | Frames sampled per video during face preparation |
+| `--data-dir PATH` | `data` | Where imported videos, crops and features go |
+| `--resume` | off | Skip stages already marked completed in `runs/experiment-status.json` |
+
+Fast GPU run: `--device cuda --batch-size 32 --frames-per-video 32 --workers 4`.
 
 Results land in `models/spatial.pt`, `models/temporal.pt` (with `.history.json` training logs) and `runs/ffpp-test.json`, `runs/celeb-external.json`. Open them with `python -m frameguard dashboard`.
 
@@ -156,7 +189,7 @@ python -m frameguard evaluate data/features models/temporal.pt runs/ffpp-test.js
 python -m frameguard evaluate data/features models/temporal.pt runs/celeb-external.json --split external
 ```
 
-Add `--device cuda` to `train`, `cache-features` and `evaluate` to use the GPU.
+Add `--device cuda` to `train`, `cache-features` and `evaluate` to use the GPU. `train` also accepts `--frames-per-video`, `--workers` and `--amp`. `import-archives` accepts ZIPs or extracted folders.
 
 ### Inference
 
@@ -171,7 +204,7 @@ Each JSONL record holds per-face boxes, scores, threshold, mode (`spatial` or `t
 ### Tests
 
 ```powershell
-python -m unittest discover -s tests -v   # 35 tests
+python -m unittest discover -s tests -v   # 38 tests
 node tests/test_charts.cjs                # dashboard chart maths
 ```
 
@@ -179,7 +212,8 @@ node tests/test_charts.cjs                # dashboard chart maths
 
 ```text
 frameguard/
-  archives.py    dataset import and leakage-checked splitting
+  archives.py    dataset import (ZIP or folder) and leakage-checked splitting
+  assets.py      download and hash-check the pretrained assets
   indexing.py    FF++ / Celeb-DF indexing and manifest merging
   manifest.py    manifest schema and validation
   media.py       decoding and MediaPipe face detection
@@ -195,6 +229,7 @@ frameguard/
 dashboard/       static HTML/CSS/JS dashboard and chart maths
 scripts/         end-to-end experiment runner (run_experiment.py)
 splits/          reference train/val/test split from the original run
+kaggle/          ready-to-run Kaggle GPU notebook
 setup.ps1        one-step environment setup for a fresh Windows machine
 tests/           unit tests (Python + Node)
 ```
@@ -205,7 +240,7 @@ tests/           unit tests (Python + Node)
 |---|---|
 | Data import, manifests, leakage checks | ✅ Done |
 | Face detection, tracking, cropping | ✅ Done (280,374 crops) |
-| Code, CLI, dashboard, tests | ✅ Done (35/35 tests passing) |
+| Code, CLI, dashboard, tests | ✅ Done (38/38 tests passing) |
 | Stage A: spatial CNN training | ⏳ Started, no epoch completed yet |
 | Stage B: LSTM training | ⏳ Pending |
 | Internal and Celeb-DF evaluation | ⏳ Pending |

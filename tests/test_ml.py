@@ -117,6 +117,39 @@ class MLTests(unittest.TestCase):
             history = json.loads(checkpoint.with_suffix('.history.json').read_text())
             self.assertIn('validation_loss', history[0])
             self.assertIn('training_accuracy', history[0])
+            self.assertEqual(history[0]['training_samples'], 2)
+
+
+    def test_sampler_epoch_length_and_amp_guard(self):
+        import json
+        from dataclasses import asdict
+        import numpy as np
+        from frameguard.data import Samples
+        from frameguard.model import ModelConfig
+        from frameguard.train import use_amp
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = []
+            for label, frames in ((0, 10), (1, 30)):
+                name = f"train_{label}"
+                np.savez_compressed(root / f"{name}.npz", crops=np.zeros((frames, 224, 224, 3), dtype=np.uint8),
+                                    timestamps=np.arange(frames) / 8, tracks=np.zeros(frames, dtype=np.int64))
+                rows.append(dict(dataset="synthetic-test-fixture", video_id=name, source_ids=name, identity_ids="",
+                                 split="train", label=label, file=f"{name}.npz"))
+            index = dict(format=1, config=asdict(ModelConfig()), videos=rows, rejected=[], manifest_sha256="test")
+            (root / "index.json").write_text(json.dumps(index), encoding="utf-8")
+            samples = Samples(root, "train")
+            self.assertEqual(len(samples), 40)
+            self.assertEqual(len(list(samples.balanced_sampler())), 40)
+            drawn = list(samples.balanced_sampler(2000))
+            self.assertEqual(len(drawn), 2000)
+            fake_share = sum(samples.videos[samples.samples[i][0]]["label"] for i in drawn) / len(drawn)
+            self.assertAlmostEqual(fake_share, 0.5, delta=0.06)
+        self.assertFalse(use_amp("cpu", None))
+        self.assertTrue(use_amp("cuda", None))
+        self.assertFalse(use_amp("cuda", False))
+        with self.assertRaises(ValueError):
+            use_amp("cpu", True)
 
 
 if __name__ == "__main__":

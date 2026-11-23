@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 
 from frameguard.manifest import FIELDS, read_manifest
 from frameguard.indexing import index_celeb, index_ffpp, merge_manifests
@@ -160,6 +161,66 @@ class TemporalTests(unittest.TestCase):
     def test_iou(self):
         self.assertEqual(iou((0, 0, 10, 10), (0, 0, 10, 10)), 1)
         self.assertEqual(iou((0, 0, 10, 10), (20, 20, 30, 30)), 0)
+
+
+NL = bytes([10])
+
+
+class ImportTests(unittest.TestCase):
+    """ZIP and extracted-folder inputs must give identical video IDs, labels and splits."""
+
+    def build(self, root):
+        ffpp = root / "ffpp-folder" / "nested"
+        celeb = root / "celeb-folder"
+        files = {}
+        for index in range(20):
+            files[ffpp / f"FaceForensics++_C23/original/{index:03d}.mp4"] = b"real"
+        for index in range(0, 20, 2):  # 10 independent source groups
+            files[ffpp / f"FaceForensics++_C23/Deepfakes/{index:03d}_{index + 1:03d}.mp4"] = b"fake"
+        files[ffpp / "FaceForensics++_C23/Face2Face/000_001.mp4"] = b"ignored"
+        for name in ("Celeb-real/id0_0000.mp4", "Celeb-synthesis/id0_id1_0000.mp4", "YouTube-real/00001.mp4"):
+            files[celeb / name] = b"video"
+        files[celeb / "List_of_testing_videos.txt"] = (
+            b"1 Celeb-real/id0_0000.mp4" + NL + b"0 Celeb-synthesis/id0_id1_0000.mp4" + NL + b"1 YouTube-real/00001.mp4" + NL)
+        for path, content in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        zips = []
+        for folder, name in ((ffpp, "ffpp.zip"), (celeb, "celeb.zip")):
+            with zipfile.ZipFile(root / name, "w") as archive:
+                for path in folder.rglob("*"):
+                    if path.is_file():
+                        archive.write(path, path.relative_to(folder).as_posix())
+            zips.append(root / name)
+        return (root / "ffpp-folder", celeb), zips
+
+    def test_zip_and_folder_give_identical_split(self):
+        from frameguard.archives import import_archives
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            folders, zips = self.build(root)
+            import_archives(*zips, root / "from-zip")
+            import_archives(*folders, root / "from-folder")
+            def load(name):
+                rows = read_manifest(root / name / "manifest.csv")
+                return {(r["dataset"], r["video_id"]): (r["label"], r["split"]) for r in rows}, rows
+            from_zip, _ = load("from-zip")
+            from_folder, rows = load("from-folder")
+            self.assertEqual(from_zip, from_folder)
+            self.assertEqual(len(from_folder), 33)
+            self.assertEqual(from_folder[("Celeb-DF-v2", "Celeb-synthesis/id0_id1_0000.mp4")], (1, "external"))
+            # Folder inputs are referenced in place, not copied.
+            self.assertTrue(all(Path(r["path"]).is_relative_to(root / "ffpp-folder") or
+                                Path(r["path"]).is_relative_to(root / "celeb-folder") for r in rows))
+            self.assertFalse((root / "from-folder" / "ffpp").exists())
+
+    def test_missing_folder_marker_rejected(self):
+        from frameguard.archives import import_archives
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "empty").mkdir()
+            with self.assertRaisesRegex(ValueError, "Could not find FaceForensics"):
+                import_archives(root / "empty", root / "empty", root / "out")
 
 
 if __name__ == "__main__":

@@ -48,6 +48,9 @@ def parser():
     training.add_argument("--epochs", type=int, default=5)
     training.add_argument("--batch-size", type=int, default=8)
     training.add_argument("--seed", type=int, default=42)
+    training.add_argument("--frames-per-video", type=int, help="Spatial stage: crops drawn per video per epoch (default: all)")
+    training.add_argument("--workers", type=int, default=0, help="DataLoader worker processes")
+    training.add_argument("--amp", choices=["auto", "on", "off"], default="auto", help="float16 mixed precision (CUDA only)")
     evaluation = commands.add_parser("evaluate")
     evaluation.add_argument("folder")
     evaluation.add_argument("checkpoint")
@@ -100,6 +103,7 @@ def main():
             cache_features(**arguments)
         elif command == "train":
             from .train import train
+            arguments["amp"] = {"auto": None, "on": True, "off": False}[arguments["amp"]]
             train(**arguments)
         elif command == "evaluate":
             from .evaluate import evaluate

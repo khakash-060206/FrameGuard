@@ -1,14 +1,19 @@
-"""Run the full FrameGuard experiment from dataset ZIPs to evaluation reports.
+"""Run the full FrameGuard experiment from raw datasets to evaluation reports.
 
-Usage (from the project folder, after setup.ps1):
+Usage (from the project folder):
 
-    .\\.venv\\Scripts\\python.exe scripts\\run_experiment.py --device auto
+    python scripts/run_experiment.py --device auto
+    python scripts/run_experiment.py --ffpp /kaggle/input/ff-c23 --celeb /kaggle/input/celeb-df-v2 \
+        --data-dir /tmp/frameguard --frames-per-video 32 --batch-size 32 --workers 4
 
-Stages: import ZIPs -> verify split -> prepare face crops -> train spatial CNN ->
+Stages: import datasets -> verify split -> prepare face crops -> train spatial CNN ->
 cache features -> train LSTM -> evaluate internal test -> evaluate Celeb-DF.
-Live state is written to runs/experiment-status.json. The runner stops at the first
-failed stage. Every stage refuses to overwrite existing outputs, so a rerun after a
-failure needs the failed stage's output removed or a fresh project folder.
+
+Datasets can be ZIP files (extracted into --data-dir) or already-extracted folders
+(used in place). Live state is written to runs/experiment-status.json. The runner stops
+at the first failed stage. With --resume, stages recorded as completed in that file are
+skipped, so an interrupted run continues from the stage that did not finish (a partially
+finished stage's output must be removed first).
 """
 import argparse
 import csv
@@ -24,35 +29,48 @@ os.chdir(ROOT)
 os.environ["TORCH_HOME"] = str(ROOT / ".cache/torch")
 os.environ["MPLCONFIGDIR"] = str(ROOT / ".cache/matplotlib")
 
-IMPORTED = Path("data/imported")
-MANIFEST = IMPORTED / "manifest.csv"
 REFERENCE_SPLIT = Path("splits/reference-split.csv")
 DETECTOR = "models/blaze_face_short_range.tflite"
+STATUS = ROOT / "runs/experiment-status.json"
 
 
 def arguments():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--ffpp-zip", default="data/archive.zip", help="FaceForensics++ C23 ZIP (default: data/archive.zip)")
-    parser.add_argument("--celeb-zip", default="data/archive (1).zip", help="Celeb-DF v2 ZIP (default: 'data/archive (1).zip')")
+    parser.add_argument("--ffpp", "--ffpp-zip", dest="ffpp", default="data/archive.zip",
+                        help="FaceForensics++ C23 as a ZIP or folder (default: data/archive.zip)")
+    parser.add_argument("--celeb", "--celeb-zip", dest="celeb", default="data/archive (1).zip",
+                        help="Celeb-DF v2 as a ZIP or folder (default: 'data/archive (1).zip')")
+    parser.add_argument("--data-dir", default="data",
+                        help="Where imported videos, face crops and features are written (default: data)")
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
-    parser.add_argument("--epochs", type=int, default=5, help="Epochs for each training stage")
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--threads", type=int, default=4, help="PyTorch CPU threads")
+    parser.add_argument("--epochs", type=int, default=5, help="Epochs for each training stage (default: 5)")
+    parser.add_argument("--batch-size", type=int, default=8, help="Default: 8")
+    parser.add_argument("--max-samples", type=int, default=256,
+                        help="Max sampled frames per video during face preparation (default: 256, ~32 s at 8 fps)")
+    parser.add_argument("--frames-per-video", type=int, default=None,
+                        help="Spatial training: crops drawn per training video per epoch. Default: all crops (~140/video)")
+    parser.add_argument("--workers", type=int, default=0, help="DataLoader worker processes (default: 0)")
+    parser.add_argument("--amp", default="auto", choices=["auto", "on", "off"],
+                        help="float16 mixed precision; auto = on for CUDA (default: auto)")
+    parser.add_argument("--threads", type=int, default=4, help="PyTorch CPU threads (default: 4)")
+    parser.add_argument("--resume", action="store_true",
+                        help="Skip stages already recorded as completed in runs/experiment-status.json")
     parser.add_argument("--allow-split-mismatch", action="store_true",
                         help="Continue even if the imported split differs from splits/reference-split.csv")
     return parser.parse_args()
 
 
-def verify_split(allow_mismatch):
+def verify_split(manifest, allow_mismatch):
     """Compare the freshly built split with the reference split from the original run."""
     if not REFERENCE_SPLIT.exists():
         print("No reference split found; skipping split comparison.", flush=True)
         return
+
     def load(path):
         with open(path, newline="", encoding="utf-8") as handle:
             return {(row["dataset"], row["video_id"]): (row["label"], row["split"]) for row in csv.DictReader(handle)}
-    reference = load(REFERENCE_SPLIT)
-    current = load(MANIFEST)
+
+    reference, current = load(REFERENCE_SPLIT), load(manifest)
     missing = reference.keys() - current.keys()
     extra = current.keys() - reference.keys()
     changed = [key for key in reference.keys() & current.keys() if reference[key] != current[key]]
@@ -60,18 +78,19 @@ def verify_split(allow_mismatch):
         print(f"Split matches the reference exactly ({len(reference)} videos).", flush=True)
         return
     message = (f"Split differs from {REFERENCE_SPLIT}: {len(missing)} missing, {len(extra)} extra, "
-               f"{len(changed)} with a different label/split. The dataset ZIPs are probably not the same "
+               f"{len(changed)} with a different label/split. The datasets are probably not the same "
                f"versions as the original run, so results would not be comparable.")
     if allow_mismatch:
         print("WARNING: " + message, flush=True)
     else:
-        raise ValueError(message + " Use the same ZIPs, or pass --allow-split-mismatch to continue anyway.")
+        raise ValueError(message + " Use the same datasets, or pass --allow-split-mismatch to continue anyway.")
 
 
 def main():
     options = arguments()
     import torch
     import cv2
+    from frameguard.assets import ensure_assets
     from frameguard.archives import import_archives
     from frameguard.prepare import prepare
     from frameguard.train import train
@@ -82,7 +101,8 @@ def main():
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
     if device == "cuda" and not torch.cuda.is_available():
-        raise SystemExit("--device cuda requested but PyTorch cannot see a CUDA GPU. Rerun setup.ps1 or use --device cpu.")
+        raise SystemExit("--device cuda requested but PyTorch cannot see a CUDA GPU. Use --device cpu.")
+    amp = {"auto": None, "on": True, "off": False}[options.amp]
     if device == "cuda":
         torch.backends.cudnn.benchmark = True
         print(f"Using GPU: {torch.cuda.get_device_name(0)}", flush=True)
@@ -90,44 +110,63 @@ def main():
         print("Using CPU. Training will take many hours.", flush=True)
     torch.set_num_threads(options.threads)
     cv2.setNumThreads(2)
+    ensure_assets(ROOT)
 
+    data = Path(options.data_dir)
+    imported, crops, features = data / "imported", data / "crops", data / "features"
+    manifest = imported / "manifest.csv"
     epochs, batch = options.epochs, options.batch_size
-    stages = []
-    if not MANIFEST.exists():
-        for name in (options.ffpp_zip, options.celeb_zip):
-            if not Path(name).is_file():
-                raise SystemExit(f"Dataset ZIP not found: {name}. Pass its location with --ffpp-zip / --celeb-zip.")
-        stages.append(("importing_archives", lambda: import_archives(options.ffpp_zip, options.celeb_zip, str(IMPORTED), seed=42)))
-    else:
-        print(f"{MANIFEST} already exists; skipping import.", flush=True)
-    stages += [
-        ("verifying_split", lambda: verify_split(options.allow_split_mismatch)),
-        ("preparing_faces", lambda: prepare(str(MANIFEST), "data/crops", DETECTOR)),
-        ("training_spatial", lambda: train("data/crops", "models/spatial.pt", "spatial",
-                                           epochs=epochs, batch_size=batch, device=device)),
-        ("caching_features", lambda: cache_features("data/crops", "models/spatial.pt", "data/features", device=device)),
-        ("training_temporal", lambda: train("data/features", "models/temporal.pt", "temporal", "models/spatial.pt",
-                                            epochs=epochs, batch_size=batch, device=device)),
-        ("evaluating_internal", lambda: evaluate("data/features", "models/temporal.pt", "runs/ffpp-test.json",
+    common = dict(batch_size=batch, device=device, workers=options.workers, amp=amp)
+
+    def import_data():
+        if manifest.exists():
+            print(f"{manifest} already exists; reusing it.", flush=True)
+            return
+        for name in (options.ffpp, options.celeb):
+            if not Path(name).exists():
+                raise ValueError(f"Dataset not found: {name}. Pass its location with --ffpp / --celeb.")
+        import_archives(options.ffpp, options.celeb, str(imported), seed=42)
+
+    stages = [
+        ("importing_datasets", import_data),
+        ("verifying_split", lambda: verify_split(manifest, options.allow_split_mismatch)),
+        ("preparing_faces", lambda: prepare(str(manifest), str(crops), DETECTOR, max_samples=options.max_samples)),
+        ("training_spatial", lambda: train(str(crops), "models/spatial.pt", "spatial", epochs=epochs,
+                                           frames_per_video=options.frames_per_video, **common)),
+        ("caching_features", lambda: cache_features(str(crops), "models/spatial.pt", str(features), device=device)),
+        ("training_temporal", lambda: train(str(features), "models/temporal.pt", "temporal", "models/spatial.pt",
+                                            epochs=epochs, **common)),
+        ("evaluating_internal", lambda: evaluate(str(features), "models/temporal.pt", "runs/ffpp-test.json",
                                                  device=device, batch_size=batch)),
-        ("evaluating_external", lambda: evaluate("data/features", "models/temporal.pt", "runs/celeb-external.json",
+        ("evaluating_external", lambda: evaluate(str(features), "models/temporal.pt", "runs/celeb-external.json",
                                                  split="external", device=device, batch_size=batch)),
     ]
 
-    status_path = ROOT / "runs/experiment-status.json"
-    status_path.parent.mkdir(exist_ok=True)
-    status = {"pid": os.getpid(), "device": device, "epochs_per_stage": epochs, "batch_size": batch,
-              "completed_stages": []}
+    done = []
+    if options.resume and STATUS.exists():
+        done = json.loads(STATUS.read_text(encoding="utf-8")).get("completed_stages", [])
+        # Import and split checks are cheap and validate the current inputs, so they always rerun.
+        done = [name for name in done if name not in {"importing_datasets", "verifying_split"}]
+        if done:
+            print(f"Resuming: skipping completed stages {done}", flush=True)
+
+    STATUS.parent.mkdir(exist_ok=True)
+    settings = {"device": device, "epochs_per_stage": epochs, "batch_size": batch, "max_samples": options.max_samples,
+                "frames_per_video": options.frames_per_video, "workers": options.workers, "amp": options.amp,
+                "data_dir": str(data)}
+    status = {"pid": os.getpid(), **settings, "completed_stages": list(done)}
 
     def record(phase, error=None):
         status.update(phase=phase, updated_at=datetime.now(timezone.utc).isoformat(), error=error)
-        temporary = status_path.with_suffix(".json.partial")
+        temporary = STATUS.with_suffix(".json.partial")
         temporary.write_text(json.dumps(status, indent=2), encoding="utf-8")
-        temporary.replace(status_path)
+        temporary.replace(STATUS)
         print(json.dumps(status), flush=True)
 
     try:
         for name, action in stages:
+            if name in done:
+                continue
             record(name)
             action()
             status["completed_stages"].append(name)
