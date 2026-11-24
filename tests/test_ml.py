@@ -19,10 +19,16 @@ class MLTests(unittest.TestCase):
         from frameguard.infer import verdict
         spatial = {"mode": "spatial", "score": 0.9, "threshold": 0.4}
         window = lambda score: {"mode": "temporal", "score": score, "threshold": 0.2}
-        result = verdict([{"faces": [spatial]}, {"faces": [window(0.1), window(0.4)]}])
+        result = verdict([{"faces": [spatial]}, {"faces": [window(0.1), window(0.4)]}], margin=0)
         self.assertEqual((result["label"], result["mode"], result["units"], result["max_faces"]), ("manipulated", "temporal", 2, 2))
         self.assertAlmostEqual(result["score"], 0.25)
-        self.assertEqual(verdict([{"faces": [spatial]}])["mode"], "spatial")
+        self.assertEqual(verdict([{"faces": [spatial]}], margin=0)["mode"], "spatial")
+        # Default band: 0.25 vs threshold 0.2 is too close to call; 0.9 and 0.01 are clear.
+        self.assertEqual(verdict([{"faces": [window(0.1), window(0.4)]}])["label"], "uncertain")
+        self.assertEqual(verdict([{"faces": [window(0.9)]}])["label"], "manipulated")
+        self.assertEqual(verdict([{"faces": [window(0.01)]}])["label"], "real")
+        low, high = verdict([{"faces": [window(0.5)]}])["uncertain_range"]
+        self.assertTrue(0 < low < 0.2 < high < 1)
         self.assertEqual(verdict([{"faces": []}])["label"], "unable_to_assess")
 
     def test_augment_keeps_shape_and_type(self):

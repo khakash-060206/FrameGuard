@@ -151,7 +151,7 @@ function render() {
     const hardware = e.device ? ` on ${e.device === 'cuda' ? 'GPU' : 'CPU'}${e.amp === 'on' ? ' with mixed precision' : ''}` : '';
     $('notice').textContent = `${phases[e.phase] || e.phase}${hardware}. Last recorded ${isNaN(when) ? e.updated_at : when.toLocaleString()}. ${e.error || (e.phase === 'completed' ? 'Thresholds were selected on validation data; Celeb-DF was held out.' : '')}`;
   }
-  overview(); training(); evaluation(); datasets(); inferenceReady();
+  overview(); training(); evaluation(); datasets(); uploadHint(); inferenceReady();
 }
 function route() {
   const page = Object.hasOwn(titles, location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
@@ -168,6 +168,10 @@ async function refresh() {
   } catch { $('connection').textContent = 'Disconnected'; $('updated').textContent = 'Server unavailable. Showing the last loaded snapshot.'; }
 }
 function download(name, content, type) { const url = URL.createObjectURL(new Blob([content], {type})); const a = element('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+function uploadHint() {
+  const frames = state.experiment?.max_samples;
+  $('upload-hint').textContent = `JPG, PNG or MP4 · up to 200 MB · ${frames ? `first ~${Math.round(frames / 8)} s of video analysed` : 'opening seconds of video analysed'}`;
+}
 function inferenceReady() {
   const online = location.protocol !== 'file:';
   $('analyse').disabled = busy || !online || !state.can_predict || !$('media-file').files.length;
@@ -176,9 +180,11 @@ function inferenceReady() {
 function showVerdict(v, maxFrames) {
   const box = $('verdict'); box.replaceChildren(); box.hidden = !v; if (!v) return;
   box.className = `verdict ${v.label}`;
-  box.append(element('strong', {manipulated: 'Likely manipulated', real: 'No manipulation detected', unable_to_assess: 'Unable to assess'}[v.label] || v.label));
-  if (Number.isFinite(v.score)) box.append(element('p', `Score ${decimal(v.score)} against threshold ${decimal(v.threshold)} · ${v.mode === 'temporal' ? `mean of ${v.units} LSTM windows, as in evaluation` : `mean of ${v.units} frame scores (no full 16-frame window)`}`));
+  box.append(element('strong', {manipulated: 'Likely manipulated', real: 'No manipulation detected', uncertain: 'Uncertain: too close to call', unable_to_assess: 'Unable to assess'}[v.label] || v.label));
+  const band = v.uncertain_range ? ` · uncertain between ${decimal(v.uncertain_range[0])} and ${decimal(v.uncertain_range[1])}` : '';
+  if (Number.isFinite(v.score)) box.append(element('p', `Score ${decimal(v.score)} against threshold ${decimal(v.threshold)}${band} · ${v.mode === 'temporal' ? `mean of ${v.units} LSTM windows, as in evaluation` : `mean of ${v.units} frame scores (no full 16-frame window)`}`));
   const notes = [];
+  if (v.label === 'uncertain') notes.push('On held-out test videos, scores in this range were right only about 60% of the time, so no call is made.');
   if (v.max_faces > 1) notes.push('More than one face appeared. The model was evaluated on single-face videos only.');
   if (v.mode === 'temporal' && maxFrames) notes.push(`Only the first ${maxFrames} sampled frames (~${maxFrames / 8} s) are scored, matching the evaluated protocol.`);
   notes.push('Accuracy is measured on the datasets shown in Overview; fakes from generators unlike those can be missed, so "no manipulation detected" is not proof of authenticity.');
@@ -198,6 +204,9 @@ $('analyse').addEventListener('click', async () => {
     const query = new URLSearchParams({name: file.name, checkpoint: $('checkpoint-select').value});
     const response = await fetch(`/api/predict?${query}`, {method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: file}); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Analysis failed');
     showVerdict(data.verdict, data.max_frames);
+    // Per-face calls use the same band as the overall verdict (same log-odds margin around each face's threshold).
+    const margin = data.verdict?.uncertain_range ? Math.log(data.verdict.uncertain_range[1] / (1 - data.verdict.uncertain_range[1])) - Math.log(data.verdict.threshold / (1 - data.verdict.threshold)) : 0;
+    const assess = (score, threshold) => { const centre = Math.log(threshold / (1 - threshold)), logit = Math.log(score / (1 - score)); return Math.abs(logit - centre) < margin ? 'Uncertain' : score >= threshold ? 'Manipulated' : 'Real'; };
     const tracks = new Map();
     for (const record of data.records) for (const face of record.faces) {
       const track = tracks.get(face.track_id) || {frames: 0, windows: [], spatial: [], threshold: face.threshold};
@@ -208,7 +217,7 @@ $('analyse').addEventListener('click', async () => {
     const mean = values => values.reduce((a, b) => a + b, 0) / values.length;
     table('inference-results', ['Face track', 'Frames', 'LSTM windows', 'Mean score', 'Threshold', 'Assessment'], [...tracks].map(([id, t]) => {
       const score = t.windows.length ? mean(t.windows.map(p => p[1])) : mean(t.spatial);
-      return [`Face ${id}`, number(t.frames), t.windows.length ? number(t.windows.length) : '—', decimal(score), decimal(t.threshold), score >= t.threshold ? 'Manipulated' : 'Real'];
+      return [`Face ${id}`, number(t.frames), t.windows.length ? number(t.windows.length) : '—', decimal(score), decimal(t.threshold), assess(score, t.threshold)];
     }));
     $('inference-results').dataset.complete = 'true'; $('inference-status').textContent = tracks.size ? `Analysis complete. ${tracks.size} face track${tracks.size > 1 ? 's' : ''} assessed. A score is not a guarantee of authenticity.` : 'Unable to assess: no usable faces were detected.';
     const timelines = [...tracks].filter(([, t]) => t.windows.length);

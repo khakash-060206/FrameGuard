@@ -1,6 +1,7 @@
 """UI-independent image, recorded-video, and live-frame inference."""
 
 import json
+import math
 from pathlib import Path
 import queue
 import threading
@@ -121,18 +122,32 @@ def webcam_frames(camera=0, duration=30):
         capture.release()
 
 
-def verdict(records):
+# Scores within this many log-odds of the threshold are reported as "uncertain". Fixed a priori (not tuned on
+# test data); on the Run 2 test set it flags 6.3% of videos, whose accuracy is 59.5% versus 97.1% for the rest.
+UNCERTAIN_MARGIN = 1.5
+
+
+def uncertain_band(threshold, margin=UNCERTAIN_MARGIN):
+    """Score interval (low, high) treated as too close to the threshold to call."""
+    centre = math.log(threshold / (1 - threshold))
+    return tuple(1 / (1 + math.exp(-(centre + offset))) for offset in (-margin, margin))
+
+
+def verdict(records, margin=UNCERTAIN_MARGIN):
     """Media-level verdict scored like evaluation: mean of every temporal window score against the
     validation-selected temporal threshold. Images and clips too short for a window fall back to the
-    mean spatial frame score against the spatial threshold."""
+    mean spatial frame score against the spatial threshold. Scores inside the uncertainty band
+    around the threshold give "uncertain" rather than a forced real/manipulated call."""
     faces = [face for record in records for face in record["faces"]]
     if not faces:
         return {"label": "unable_to_assess", "mode": None, "score": None, "threshold": None, "units": 0, "max_faces": 0}
     windows = [face for face in faces if face["mode"] == "temporal"]
     used = windows or faces
     score, threshold = float(np.mean([face["score"] for face in used])), used[0]["threshold"]
-    return {"label": "manipulated" if score >= threshold else "real", "mode": "temporal" if windows else "spatial",
-            "score": score, "threshold": threshold, "units": len(used),
+    low, high = uncertain_band(threshold, margin)
+    label = "uncertain" if low < score < high else "manipulated" if score >= threshold else "real"
+    return {"label": label, "mode": "temporal" if windows else "spatial",
+            "score": score, "threshold": threshold, "uncertain_range": [low, high], "units": len(used),
             "max_faces": max(len(record["faces"]) for record in records), "calibrated": False}
 
 
