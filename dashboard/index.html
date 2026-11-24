@@ -1,78 +1,202 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FrameGuard · Experiment Lab</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FrameGuard results</title>
   <link rel="stylesheet" href="style.css">
   <script src="data.js" defer></script><script src="charts.js" defer></script><script src="app.js" defer></script>
 </head>
 <body>
-  <a class="skip" href="#main">Skip to results</a>
-  <aside class="sidebar">
-    <a class="brand" href="#overview"><span class="brand-mark">F<span>G</span></span><span>FrameGuard<small>EXPERIMENT LAB</small></span></a>
-    <div class="nav-label">WORKSPACE</div>
-    <nav aria-label="Main navigation">
-      <a href="#overview" class="active" data-page="overview"><span>◫</span> Overview</a>
-      <a href="#training" data-page="training"><span>↗</span> Training history</a>
-      <a href="#evaluation" data-page="evaluation"><span>◎</span> Evaluation</a>
-      <a href="#datasets" data-page="datasets"><span>▤</span> Datasets</a>
-      <a href="#inspect" data-page="inspect"><span>⌕</span> Analyse media</a>
-    </nav>
-    <div class="sidebar-note"><span class="tiny-dot"></span> LOCAL WORKSPACE<p>Your datasets and results<br>stay on this computer.</p></div>
-    <div class="model-note"><span>ARCHITECTURE</span><strong>EfficientNet-B0 + LSTM</strong><small>Spatial features. Temporal context.</small></div>
-  </aside>
-  <div class="shell">
-    <header class="topbar"><div><span class="breadcrumb">Research workspace</span><span class="slash">/</span><span id="page-crumb">Overview</span></div><div class="top-actions"><span id="connection" class="badge neutral">Local snapshot</span><button id="refresh" class="button light">↻ Refresh</button></div></header>
-    <main id="main">
-      <div class="page-heading"><div><div class="eyebrow">FRAMEGUARD / MODEL DEVELOPMENT</div><h1 id="page-title">The experiment, at a glance.</h1><p id="page-subtitle">From training signals to held-out performance. Every number backed by a saved result.</p></div><button id="export" class="button primary">↓ Export results</button></div>
-      <div id="notice" class="notice" role="status" aria-live="polite"></div>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <a class="wordmark" href="#summary"><strong>FrameGuard</strong><span>Deepfake detector: experiment record</span></a>
+      <nav class="tabs" aria-label="Sections">
+        <a href="#summary" data-page="summary">Summary</a>
+        <a href="#results" data-page="results">Test results</a>
+        <a href="#training" data-page="training">Training</a>
+        <a href="#data" data-page="data">Data</a>
+        <a href="#try" data-page="try">Try it</a>
+      </nav>
+      <div class="tools">
+        <span id="connection" class="connection">Offline snapshot</span>
+        <button id="theme" class="button" type="button" aria-label="Switch colour theme">Dark</button>
+        <button id="refresh" class="button" type="button">Refresh</button>
+        <button id="export" class="button" type="button"><span>Export </span>JSON</button>
+      </div>
+    </div>
+  </header>
 
-      <section id="overview" class="page">
-        <div class="section-label"><h2>Evaluation snapshot</h2><span id="overview-context" class="muted">No evaluation selected</span></div>
-        <div id="kpis" class="kpi-grid"></div>
-        <div class="overview-grid">
-          <article class="panel"><div class="panel-head"><div><span class="eyebrow">EXPERIMENT PROGRESS</span><h2>A clear path to a tested model</h2></div><span class="badge neutral" id="progress-count"></span></div><div id="pipeline" class="pipeline"></div></article>
-          <article class="panel dataset-card"><span class="eyebrow">DATA FOUNDATION</span><h2 id="data-total">—</h2><p>videos selected for this experiment</p><div id="overview-data"></div><a href="#datasets" class="text-link">Explore dataset splits <span>↗</span></a></article>
+  <main id="main">
+    <p id="notice" class="notice" role="status" aria-live="polite"></p>
+
+    <!-- Summary -->
+    <section id="summary" class="page" aria-labelledby="headline">
+      <h1 id="headline">No evaluation has been saved yet.</h1>
+      <p id="lede" class="lede">Train and evaluate a model, and this page will summarise how well it separates real from manipulated faces.</p>
+
+      <div class="section">
+        <div class="section-head">
+          <h2>How far each test group is from guessing</h2>
+          <p>ROC-AUC on held-out videos. 0.5 is a coin flip, 1.0 is perfect ranking. The bar around each blue dot is a 95% bootstrap interval.</p>
         </div>
-        <div class="panel"><div class="panel-head"><div><span class="eyebrow">SPATIAL VS. TEMPORAL</span><h2>Does sequence context help?</h2></div><a href="#evaluation" class="text-link">Full evaluation ↗</a></div><div id="overview-comparison"></div></div>
-        <div class="panel"><div class="panel-head"><div><span class="eyebrow">GENERALISATION</span><h2>In-domain vs. unseen dataset</h2></div><span class="muted">CNN + LSTM · thresholds from FF++ validation</span></div><div id="generalisation" class="gap-grid"></div><p class="chart-note">ROC-AUC measures ranking at any threshold; recall uses the fixed validation threshold. A high AUC with low recall means scores shift on unseen data.</p></div>
-      </section>
+        <div class="sheet"><div id="ruler" class="ruler"></div><div id="ruler-key" class="key"></div></div>
+      </div>
 
-      <section id="training" class="page" hidden>
-        <div class="filters"><label>Training run<select id="history-select"></select></label><span id="history-summary" class="muted"></span></div>
-        <div class="chart-grid">
-          <article class="panel"><div class="panel-head"><div><span class="eyebrow">OPTIMISATION</span><h2>Loss over epochs</h2></div><button class="icon-button" data-save-chart aria-label="Download loss chart">↓ SVG</button></div><div id="loss-chart" class="chart"></div><p class="chart-note">Binary cross-entropy on sampled frames or windows.</p></article>
-          <article class="panel"><div class="panel-head"><div><span class="eyebrow">CLASSIFICATION</span><h2>Accuracy over epochs</h2></div><button class="icon-button" data-save-chart aria-label="Download accuracy chart">↓ SVG</button></div><div id="accuracy-chart" class="chart"></div><p class="chart-note">Train: sampled units at 0.5. Validation: videos at each epoch's selected threshold. These are different evaluation units.</p></article>
-          <article class="panel"><div class="panel-head"><div><span class="eyebrow">RANKING QUALITY</span><h2>Validation ROC-AUC</h2></div><button class="icon-button" data-save-chart aria-label="Download AUC chart">↓ SVG</button></div><div id="auc-chart" class="chart"></div></article>
-          <article class="panel"><div class="panel-head"><div><span class="eyebrow">VALIDATION</span><h2>Precision, recall & F1</h2></div><button class="icon-button" data-save-chart aria-label="Download validation metrics chart">↓ SVG</button></div><div id="validation-chart" class="chart"></div></article>
+      <div class="facts">
+        <div class="fact" id="fact-uncertain"></div>
+        <div class="fact" id="fact-lstm"></div>
+        <div class="fact" id="fact-run"></div>
+      </div>
+    </section>
+
+    <!-- Test results -->
+    <section id="results" class="page" hidden aria-label="Test results">
+      <div class="filters">
+        <label>Report<select id="report-select"></select></label>
+        <label>Test group<select id="domain-select"></select></label>
+        <label>Model<select id="model-select"><option value="temporal">CNN + LSTM</option><option value="spatial">CNN only (baseline)</option></select></label>
+        <span id="eval-context" class="context"></span>
+      </div>
+
+      <div id="eval-tiles" class="tiles"></div>
+
+      <div class="section grid-2">
+        <div class="sheet">
+          <div class="section-head"><h2>All metrics</h2><p>Both models on the same videos and windows.</p></div>
+          <div id="metric-table" class="table-wrap"></div>
         </div>
-        <article class="panel"><div class="panel-head"><h2>Epoch log</h2><span class="muted">Saved by the training pipeline</span></div><div id="epoch-table" class="table-wrap"></div></article>
-      </section>
-
-      <section id="evaluation" class="page" hidden>
-        <div class="filters"><label>Evaluation report<select id="report-select"></select></label><label>Dataset<select id="domain-select"></select></label><label>Model<select id="model-select"><option value="temporal">CNN + LSTM</option><option value="spatial">CNN baseline</option></select></label><span id="eval-context" class="badge neutral">Video-level</span></div>
-        <div id="eval-kpis" class="kpi-grid"></div>
-        <div class="chart-grid">
-          <article class="panel"><div class="panel-head"><div><span class="eyebrow">DISCRIMINATION</span><h2>ROC curve</h2></div><button class="icon-button" data-save-chart aria-label="Download ROC chart">↓ SVG</button></div><div id="roc-chart" class="chart"></div><p class="chart-note">True-positive rate against false-positive rate. Dashed line: chance ranking.</p></article>
-          <article class="panel"><div class="panel-head"><div><span class="eyebrow">POSITIVE CLASS: MANIPULATED</span><h2>Precision–recall curve</h2></div><button class="icon-button" data-save-chart aria-label="Download precision recall chart">↓ SVG</button></div><div id="pr-chart" class="chart"></div><p id="pr-note" class="chart-note">Threshold-independent view of detection trade-offs.</p></article>
-          <article class="panel"><div class="panel-head"><div><span class="eyebrow">OPERATING POINT</span><h2>Confusion matrix</h2></div><span id="threshold" class="badge neutral">Threshold —</span></div><div id="confusion"></div><p class="chart-note">Rows: actual class. Columns: predicted class. Threshold selected using validation data.</p></article>
-          <article class="panel"><div class="panel-head"><div><span class="eyebrow">SCORE SEPARATION</span><h2>Manipulation score distribution</h2></div><button class="icon-button" data-save-chart aria-label="Download score distribution">↓ SVG</button></div><div id="distribution" class="chart"></div><p class="chart-note">Video scores are model outputs, not calibrated probabilities.</p></article>
+        <div class="sheet">
+          <div class="section-head"><h2>Confusion matrix</h2><span id="threshold" class="tag"></span></div>
+          <div id="confusion"></div>
+          <p class="note">Rows are the true class, columns the prediction, at the threshold chosen on validation data.</p>
         </div>
-        <article class="panel"><div class="panel-head"><h2>Model comparison</h2><span class="muted">Same eligible videos and temporal windows</span></div><div id="comparison" class="table-wrap"></div></article>
-        <article class="panel"><div class="panel-head"><h2>Video-level predictions</h2><label class="search-label"><span class="sr-only">Filter video predictions</span><input id="prediction-search" type="search" placeholder="Search video ID…"></label></div><div id="prediction-table" class="table-wrap"></div><button id="more-predictions" class="button light" hidden>Show more videos</button><p id="exclusions" class="chart-note"></p></article>
-      </section>
+      </div>
 
-      <section id="datasets" class="page" hidden>
-        <article class="panel"><div class="panel-head"><div><span class="eyebrow">EXPERIMENT INPUTS</span><h2>Training and evaluation splits</h2></div><span class="badge teal">Source-group checks</span></div><div id="split-chart" class="chart"></div><div id="split-table" class="table-wrap"></div></article>
-        <div class="overview-grid"><article class="panel"><h2>Split protocol</h2><p id="protocol" class="body-copy"></p><p id="protocol-note" class="body-copy"></p><div id="identity-note" class="callout"></div></article><article class="panel"><h2>Data verification</h2><p id="data-verification" class="body-copy"></p><div id="archive-list"></div></article></div>
-      </section>
+      <div class="section grid-2">
+        <div class="sheet chart-sheet">
+          <div class="chart-head"><div><h2>ROC curve</h2><p>True-positive rate against false-positive rate. The dashed line is chance.</p></div><div class="chart-tools"><button class="icon-button" data-save-chart="roc-chart" type="button">SVG</button></div></div>
+          <div id="roc-chart" class="chart"></div>
+        </div>
+        <div class="sheet chart-sheet">
+          <div class="chart-head"><div><h2>Precision and recall</h2><p id="pr-note">Manipulated videos are the positive class.</p></div><div class="chart-tools"><button class="icon-button" data-save-chart="pr-chart" type="button">SVG</button></div></div>
+          <div id="pr-chart" class="chart"></div>
+        </div>
+        <div class="sheet chart-sheet">
+          <div class="chart-head"><div><h2>Choosing the threshold</h2><p>Precision, recall and F1 at every threshold. The shaded band is where the site answers "uncertain".</p></div><div class="chart-tools"><button class="icon-button" data-save-chart="sweep-chart" type="button">SVG</button></div></div>
+          <div id="sweep-chart" class="chart"></div>
+        </div>
+        <div class="sheet chart-sheet">
+          <div class="chart-head"><div><h2>Score separation</h2><p>How real and manipulated videos are scored, with the threshold and uncertain band.</p></div><div class="chart-tools"><button class="icon-button" data-save-chart="dist-chart" type="button">SVG</button></div></div>
+          <div id="dist-chart" class="chart"></div>
+        </div>
+        <div class="sheet chart-sheet">
+          <div class="chart-head"><div><h2>Calibration</h2><p id="calib-note">Share of videos that are manipulated, per score bin. On the diagonal, a score of 0.8 would mean 80% are fake.</p></div><div class="chart-tools"><button class="icon-button" data-save-chart="calib-chart" type="button">SVG</button></div></div>
+          <div id="calib-chart" class="chart"></div>
+        </div>
+        <div class="sheet">
+          <div class="section-head"><h2>Does the LSTM help?</h2><p>Paired per video, same group.</p></div>
+          <div id="pair"></div>
+          <p id="pair-verdict" class="pair-verdict"></p>
+        </div>
+      </div>
 
-      <section id="inspect" class="page" hidden>
-        <div class="overview-grid"><article class="panel"><span class="eyebrow">LOCAL INFERENCE</span><h2>Inspect an image or video</h2><p class="body-copy">Analyse each detected face using your trained FrameGuard checkpoint.</p><label class="upload"><span class="upload-icon">↑</span><strong>Select media</strong><span id="upload-hint">JPG, PNG or MP4 · up to 200 MB</span><input id="media-file" type="file" accept=".jpg,.jpeg,.png,.mp4"></label><label class="checkpoint-label">Checkpoint<select id="checkpoint-select"></select></label><button id="analyse" class="button primary wide" disabled>Analyse media</button><p id="inference-status" class="body-copy" role="status" aria-live="polite"></p></article><article class="panel"><div class="panel-head"><h2>Media preview</h2><span id="file-name" class="muted">No file selected</span></div><div id="media-preview" class="media-preview"><span>Your selected media appears here.</span></div></article></div>
-        <article class="panel"><div class="panel-head"><h2>Face assessments</h2><span class="muted">Scores are not calibrated probabilities</span></div><div id="verdict" class="verdict" role="status" aria-live="polite" hidden></div><div id="inference-results" class="table-wrap"><p class="empty-copy">Choose media and a trained model to start an assessment.</p></div><div id="inference-chart" class="chart" hidden></div></article>
-      </section>
-      <footer><span>FrameGuard <b> / </b> Research prototype</span><span id="updated">No evaluation metrics are fabricated.</span></footer>
-    </main>
-  </div>
+      <div class="section sheet">
+        <div class="section-head"><h2>Every test group</h2><p>Same model and threshold across all groups. Unseen methods were never used in training.</p></div>
+        <div id="group-table" class="table-wrap"></div>
+      </div>
+
+      <div class="section sheet">
+        <div class="section-head"><h2>Most confident mistakes</h2><p>The six missed fakes and six false alarms with the most extreme scores.</p></div>
+        <div id="errors-table" class="table-wrap"></div>
+      </div>
+
+      <div class="section sheet">
+        <div class="section-head">
+          <h2>Every video</h2>
+          <div class="filters inline">
+            <label>Show<select id="prediction-filter"><option value="all">All videos</option><option value="wrong">Mistakes only</option><option value="uncertain">Uncertain only</option><option value="right">Correct only</option></select></label>
+            <label><span class="sr-only">Search video ID</span>Search<input id="prediction-search" type="search" placeholder="Video ID"></label>
+          </div>
+        </div>
+        <div id="prediction-table" class="table-wrap"></div>
+        <button id="more-predictions" class="button more" type="button" hidden>Show 50 more</button>
+        <p id="exclusions" class="note"></p>
+      </div>
+    </section>
+
+    <!-- Training -->
+    <section id="training" class="page" hidden aria-label="Training">
+      <div class="filters">
+        <label>Training stage<select id="history-select"></select></label>
+        <span id="history-summary" class="context"></span>
+      </div>
+      <div class="grid-3">
+        <div class="sheet chart-sheet">
+          <div class="chart-head"><div><h2>Loss</h2><p>Binary cross-entropy per epoch.</p></div><div class="chart-tools"><button class="icon-button" data-save-chart="loss-chart" type="button">SVG</button></div></div>
+          <div id="loss-chart" class="chart"></div>
+        </div>
+        <div class="sheet chart-sheet">
+          <div class="chart-head"><div><h2>Validation ROC-AUC</h2><p>The selected checkpoint is marked.</p></div><div class="chart-tools"><button class="icon-button" data-save-chart="auc-chart" type="button">SVG</button></div></div>
+          <div id="auc-chart" class="chart"></div>
+        </div>
+        <div class="sheet chart-sheet">
+          <div class="chart-head"><div><h2>Validation precision, recall, F1</h2><p>At each epoch's own threshold.</p></div><div class="chart-tools"><button class="icon-button" data-save-chart="prf-chart" type="button">SVG</button></div></div>
+          <div id="prf-chart" class="chart"></div>
+        </div>
+      </div>
+      <div class="section grid-2">
+        <div class="sheet"><div class="section-head"><h2>Epoch log</h2></div><div id="epoch-table" class="table-wrap"></div></div>
+        <div class="sheet"><div class="section-head"><h2>Run settings</h2></div><div id="model-card"></div></div>
+      </div>
+    </section>
+
+    <!-- Data -->
+    <section id="data" class="page" hidden aria-label="Data">
+      <div class="section-head"><h2 id="data-total">No dataset inventory yet</h2><p id="prep-summary"></p></div>
+      <div class="grid-2">
+        <div class="sheet">
+          <div class="section-head"><h2>Splits by dataset</h2></div>
+          <div id="split-groups"></div>
+          <div class="key"><span><i class="k-real"></i>Real</span><span><i class="k-fake"></i>Manipulated</span></div>
+        </div>
+        <div class="sheet">
+          <h2>How the data was split</h2>
+          <p id="protocol" class="lede"></p>
+          <p id="protocol-note" class="lede"></p>
+          <p id="identity-note" class="note"></p>
+          <h3 class="section">Sources</h3>
+          <p id="data-verification" class="note"></p>
+          <div id="archive-list" class="source-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Try it -->
+    <section id="try" class="page" hidden aria-label="Try it">
+      <div class="try">
+        <div class="sheet">
+          <h2>Check an image or video</h2>
+          <p class="note">Runs on this computer with your trained model. Each detected face is scored.</p>
+          <label class="drop"><strong>Choose a file</strong><span id="upload-hint">JPG, PNG or MP4, up to 200 MB</span><input id="media-file" type="file" accept=".jpg,.jpeg,.png,.mp4"></label>
+          <label class="field">Model<select id="checkpoint-select"></select></label>
+          <button id="analyse" class="button primary wide" type="button" disabled>Analyse</button>
+          <p id="inference-status" class="status-line" role="status" aria-live="polite"></p>
+        </div>
+        <div class="sheet">
+          <div class="section-head"><h2>Preview</h2><span id="file-name" class="muted">No file chosen</span></div>
+          <div id="media-preview" class="preview"><span>Your file appears here.</span></div>
+        </div>
+      </div>
+      <div class="section sheet">
+        <div class="section-head"><h2>Result</h2><p>Scores are not calibrated probabilities.</p></div>
+        <div id="verdict" class="verdict" role="status" aria-live="polite" hidden></div>
+        <div id="inference-results" class="table-wrap"><p class="empty">Choose a file and select Analyse to see a result.</p></div>
+        <div id="inference-chart" class="chart" hidden></div>
+      </div>
+    </section>
+  </main>
+  <footer><span>FrameGuard research prototype. Every number comes from a saved result file.</span><span id="updated"></span></footer>
 </body>
 </html>

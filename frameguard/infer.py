@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import torch
 
+from . import UNCERTAIN_MARGIN
 from .media import FaceDetector, SceneCuts, normalise, read_image, video_frames
 from .model import load_checkpoint
 from .temporal import SAMPLE_FPS, Tracker
@@ -120,11 +121,6 @@ def webcam_frames(camera=0, duration=30):
         stop.set()
         thread.join(timeout=2)
         capture.release()
-
-
-# Scores within this many log-odds of the threshold are reported as "uncertain". Fixed a priori (not tuned on
-# test data); on the Run 2 test set it flags 6.3% of videos, whose accuracy is 59.5% versus 97.1% for the rest.
-UNCERTAIN_MARGIN = 1.5
 
 
 def uncertain_band(threshold, margin=UNCERTAIN_MARGIN):

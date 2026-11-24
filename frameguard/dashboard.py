@@ -9,6 +9,8 @@ import tempfile
 import threading
 from urllib.parse import parse_qs, urlsplit
 
+from . import UNCERTAIN_MARGIN
+
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "dashboard"
 INFERENCE_LOCK = threading.Lock()
@@ -59,7 +61,8 @@ def snapshot(root=ROOT):
             "experiment": experiment,
             "prepared_videos": prepared_count,
             "dependencies": dependencies, "checkpoints": checkpoints, "detector": detector,
-            "can_predict": bool(checkpoints and detector and all(dependencies.values()))}
+            "can_predict": bool(checkpoints and detector and all(dependencies.values())),
+            "uncertain_margin": UNCERTAIN_MARGIN}
 
 
 def export_snapshot(root=ROOT):

@@ -91,7 +91,20 @@ python -m frameguard dashboard          # http://127.0.0.1:8765
 python -m frameguard dashboard --export # offline snapshot in dashboard/index.html
 ```
 
-The dashboard needs only the Python standard library. It shows loss and accuracy histories, ROC and precision-recall curves, confusion matrices, score distributions, model comparisons, dataset partitions, per-video predictions, and JSON/SVG export. It refreshes every 15 seconds, and the overview compares in-domain and unseen-dataset results side by side. When no results exist, the charts stay empty; it never shows placeholder metrics.
+The dashboard needs only the Python standard library, works in light and dark themes, and refreshes every 15 seconds. It has five pages:
+
+- **Summary:** each test group's ROC-AUC plotted between chance (0.5) and perfect (1.0), with 95% bootstrap intervals; how accurate the model is when it gives a verdict; whether the LSTM helps; the run's settings.
+- **Test results:**
+  - Accuracy, balanced accuracy, precision, recall, specificity, F1 and Matthews correlation.
+  - ROC-AUC with a 95% bootstrap interval, average precision, false-positive rate, Brier score, log loss and expected calibration error, for both models side by side.
+  - Charts: ROC and precision-recall curves, a threshold sweep showing the uncertain band, score distributions and a reliability (calibration) diagram.
+  - A paired CNN vs CNN + LSTM comparison with McNemar's exact test.
+  - Every test group in one table, the most confident mistakes, and a searchable list of every video.
+- **Training:** loss, validation ROC-AUC and precision/recall/F1 per epoch with the selected checkpoint marked; the epoch log; run settings.
+- **Data:** split sizes per dataset and class, the split protocol and the data sources.
+- **Try it:** analyse your own image or video (below).
+
+Every chart has a table view and an SVG download, and the whole state exports as JSON. When no results exist, the charts stay empty; it never shows placeholder metrics.
 
 **Analyse media** unlocks once trained weights exist. Upload a JPG, PNG or MP4 and it returns a verdict scored exactly like the evaluation: the mean of every LSTM window score over the same number of sampled frames the model was evaluated with (64 frames, about 8 s, for the current model), compared with the validation-selected threshold. It also shows per-face scores and a timeline of window scores against the threshold. Scores within ±1.5 log-odds of the threshold get an **Uncertain** verdict instead of a forced call. On the Run 2 test set that flags 6.3% of videos, which were right only 59.5% of the time; accuracy on the remaining videos rises from 94.7% to 97.1%. On held-out videos, the dashboard's scores match the evaluation report's scores exactly.
 
