@@ -41,10 +41,15 @@ def snapshot(root=ROOT):
         data = read(path)
         if isinstance(data, dict) and "metrics" in data and "temporal_predictions" in data:
             reports.append({"name": path.name, "report": data})
-    inventory_path = root / "data/imported/inventory.json"
-    inventory = read(inventory_path) if inventory_path.is_file() else None
-    prepared_path = root / "data/crops/index.json"
-    prepared = read(prepared_path) if prepared_path.is_file() else None
+    # A run's own inventory (copied in with Kaggle results) describes the current models; a local import is the fallback.
+    inventory_path = next((p for p in (root / "runs/inventory.json", root / "data/imported/inventory.json") if p.is_file()), None)
+    inventory = read(inventory_path) if inventory_path else None
+    if isinstance(inventory, dict) and "prepared_videos" in inventory:
+        prepared_count = inventory["prepared_videos"]
+    else:
+        prepared_path = root / "data/crops/index.json"
+        prepared = read(prepared_path) if prepared_path.is_file() else None
+        prepared_count = len(prepared.get("videos", [])) if isinstance(prepared, dict) else 0
     experiment_path = root / "runs/experiment-status.json"
     experiment = read(experiment_path) if experiment_path.is_file() else None
     dependencies = {name: importlib.util.find_spec(name) is not None for name in ("torch", "torchvision", "numpy", "cv2", "mediapipe", "sklearn")}
@@ -52,7 +57,7 @@ def snapshot(root=ROOT):
     detector = (root / "models/blaze_face_short_range.tflite").is_file()
     return {"histories": histories, "reports": reports, "inventory": inventory, "warnings": warnings,
             "experiment": experiment,
-            "prepared_videos": len(prepared.get("videos", [])) if isinstance(prepared, dict) else 0,
+            "prepared_videos": prepared_count,
             "dependencies": dependencies, "checkpoints": checkpoints, "detector": detector,
             "can_predict": bool(checkpoints and detector and all(dependencies.values()))}
 

@@ -8,7 +8,7 @@
 - **Forensic models are heavy.** State-of-the-art detectors are often too slow to inspect video streams or filter uploads on ordinary hardware.
 - **Models do not generalise.** A detector trained on one dataset's pixel artifacts often fails on new compression levels, lighting, or generation methods.
 
-FrameGuard tests a simple question: **does a lightweight temporal model on top of a frame-level CNN actually beat averaging the CNN's frame scores?** It reports the answer on both a held-out split and an unseen dataset.
+FrameGuard tests a simple question: **does a lightweight temporal model on top of a frame-level CNN actually beat averaging the CNN's frame scores?** It reports the answer on a held-out test split pooled from three datasets, per dataset, and on a manipulation method it never saw in training.
 
 ## How it works
 
@@ -49,25 +49,29 @@ Training runs in two stages, so the temporal model can be compared fairly agains
 | **B: Temporal** (5 epochs) | LSTM + sequence head | CNN stays frozen. Only unbroken 16-frame windows from a single track are used |
 
 - **Loss:** `BCEWithLogitsLoss` with gradient clipping at 1.0.
-- **Sampling:** class-balanced, then video-balanced, so long videos do not dominate.
+- **Sampling:** every (dataset, class) pair gets an equal share of draws, then videos are balanced, so no dataset, class or long video dominates.
+- **Augmentation (Run 2):** random flips, rescaling, blur, colour shifts and JPEG re-compression on training crops, to resist re-encoded and screenshot-style media.
 - **Model selection:** after each epoch, scores are aggregated per video on the validation set. The checkpoint with the best **validation ROC-AUC** is kept, along with its validation-selected threshold.
 - **Reproducibility:** every checkpoint stores the seed, manifest hash, training groups, sampler, library versions, and hardware.
 
 ## Data
 
-| Partition | Source | Real | Manipulated | Total |
+The current model (Run 2) is trained on a pooled dataset. Each dataset is split 70/15/15 by connected groups (seed 42), balanced per class:
+
+| Dataset | Grouped by | Train (real / fake) | Validation | Test |
 |---|---|---:|---:|---:|
-| Train | FaceForensics++ (C23) | 700 | 700 | 1,400 |
-| Validation | FaceForensics++ (C23) | 150 | 150 | 300 |
-| Internal test | FaceForensics++ (C23) | 150 | 150 | 300 |
-| External test | Celeb-DF v2 | 178 | 340 | 518 |
+| FaceForensics++ C23: real + Deepfakes, Face2Face, FaceSwap, NeuralTextures | Source video | 700 / 2,800 | 150 / 600 | 150 / 600 |
+| FF++ FaceShifter (**never trained on**) | Source video | – | – | 0 / 150 |
+| Celeb-DF v2: all real, 2,500 sampled fakes | Celebrity identity | 623 / 1,872 | 134 / 322 | 133 / 306 |
+| DFDC parts 00–09: 2,512 real, each with one of its fakes | Original video | 1,758 / 1,758 | 377 / 377 | 377 / 377 |
 
-- **FF++ manipulated videos are the Deepfakes method.** FF++ is split 70/15/15 by connected source group (seed 42). An original video and all of its fakes always land in the same partition.
-- **Celeb-DF is never used for training or tuning.** It follows the dataset's own test list and measures generalisation to an unseen dataset.
-- **Face preparation is complete:** 2,136 videos accepted, 382 rejected (372 with multiple faces, 10 with no usable face), 280,374 face crops. Videos with more than one face are excluded from training, because a video-level label cannot say which face was manipulated.
+- **No leakage across splits:** an original video and all of its fakes, and every video of a Celeb-DF identity, land in the same split. DFDC publishes no actor IDs, so the same actor can still appear in two different DFDC originals.
+- **Face preparation:** 64 frames per video at 8 fps. 10,971 of 13,564 videos accepted. The rest had more than one face, no usable face (often small or distant faces in DFDC), or no continuous 16-frame window. Multi-face videos are excluded because a video-level label cannot say which face was manipulated.
+- **Excluded:** FF++ DeepFakeDetection, because its real videos are not in the dataset.
 - Crops are stored as memory-mapped `.npy` arrays, so the training loader can read random frames without decompressing whole videos.
+- **Run 1** (archived) used FF++ real + Deepfakes only (2,000 videos, 256 frames each), with Celeb-DF's 518-video test list kept as an unseen dataset.
 
-Datasets are **not** included in this repository. Obtain FaceForensics++ and Celeb-DF v2 under their own terms; see [Add the datasets](#2-add-the-datasets) for the expected ZIP layout.
+Datasets are **not** included in this repository. Obtain FaceForensics++, Celeb-DF v2 and DFDC under their own terms; see [Add the datasets](#2-add-the-datasets) for the expected ZIP layout.
 
 ## Evaluation
 
@@ -78,7 +82,7 @@ Every test run compares two models on **the same windows**:
 | Spatial baseline | Fine-tuned CNN, frame scores averaged over each window |
 | FrameGuard | The same CNN's features plus the trained LSTM |
 
-The report covers ROC-AUC, precision, recall, F1, false-positive rate, confusion matrices, per-video predictions, and excluded videos. FF++ internal results and Celeb-DF external results are reported separately. Metrics are at the video level, not per correlated frame.
+The report covers ROC-AUC, precision, recall, F1, false-positive rate, confusion matrices, per-video predictions, and excluded videos. Results are reported for all datasets together, per dataset, per FF++ manipulation method, and for the unseen method separately (its fakes never count towards the totals). Metrics are at the video level, not per correlated frame.
 
 ## Dashboard
 
@@ -89,7 +93,7 @@ python -m frameguard dashboard --export # offline snapshot in dashboard/index.ht
 
 The dashboard needs only the Python standard library. It shows loss and accuracy histories, ROC and precision-recall curves, confusion matrices, score distributions, model comparisons, dataset partitions, per-video predictions, and JSON/SVG export. It refreshes every 15 seconds, and the overview compares in-domain and unseen-dataset results side by side. When no results exist, the charts stay empty; it never shows placeholder metrics.
 
-**Analyse media** unlocks once trained weights exist. Upload a JPG, PNG or MP4 and it returns a verdict scored exactly like the evaluation: the mean of every LSTM window score over the first 256 sampled frames (about 32 s), compared with the validation-selected threshold. It also shows per-face scores and a timeline of window scores against the threshold. On held-out videos, the dashboard's scores match the evaluation report's scores exactly.
+**Analyse media** unlocks once trained weights exist. Upload a JPG, PNG or MP4 and it returns a verdict scored exactly like the evaluation: the mean of every LSTM window score over the same number of sampled frames the model was evaluated with (64 frames, about 8 s, for the current model), compared with the validation-selected threshold. It also shows per-face scores and a timeline of window scores against the threshold. On held-out videos, the dashboard's scores match the evaluation report's scores exactly.
 
 ## Run it
 
@@ -97,7 +101,7 @@ There are two ways to train from scratch:
 
 | | Where | Rough time | You need |
 |---|---|---|---|
-| **A. Kaggle, mixed datasets (recommended)** | Free Kaggle GPU (T4) | ~6–8 h (estimate) | A phone-verified Kaggle account |
+| **A. Kaggle, mixed datasets (recommended)** | Free Kaggle GPU (T4) | ~3.7 h (measured on a T4) | A phone-verified Kaggle account |
 | **B. Local, original FF++ Deepfakes protocol** | Your Windows PC | ~4–7 h on an NVIDIA GPU, 2–3 days on a laptop CPU | ~80 GB free disk, the dataset ZIPs |
 
 ### A. Train on Kaggle (mixed datasets)
@@ -123,7 +127,7 @@ This run trains for generalisation. It pools three datasets into one leakage-che
 1. On [kaggle.com](https://www.kaggle.com), create a notebook and import [`kaggle/frameguard-kaggle.ipynb`](kaggle/frameguard-kaggle.ipynb) (*File → Import Notebook*).
 2. *Add Input*: the three datasets above. They are mounted directly, so nothing has to be downloaded or uploaded.
 3. *Settings*: **Accelerator → GPU T4**, **Internet → On**.
-4. **Save Version → Save & Run All (Commit)**. The run continues with the browser closed (12-hour limit). Face preparation prints an ETA every 25 videos. If that ETA alone passes ~7 h, stop the run and lower `DFDC_REALS` in the first cell.
+4. **Save Version → Save & Run All (Commit)**. The run continues with the browser closed (12-hour limit). Face preparation prints an ETA every 25 videos (it took 2 h 22 min in Run 2).
 5. When it finishes, download `frameguard-results.zip` from the version's **Output** tab and unzip it into your local project to view the results in the dashboard.
 
 The original single-method run (FF++ Deepfakes only, Celeb-DF test list as an unseen dataset) is still available. Run `scripts/run_experiment.py` without `--dfdc`; that is what produced the results in [Status](#status).
@@ -261,15 +265,38 @@ tests/           unit tests (Python + Node)
 | Data import, manifests, leakage checks | ✅ Done |
 | Face detection, tracking, cropping | ✅ Done (280,374 crops) |
 | Code, CLI, dashboard, tests | ✅ Done (44/44 tests passing) |
-| Stage A: spatial CNN training | ✅ Done (5 epochs, best validation AUC at epoch 2) |
-| Stage B: LSTM training | ✅ Done (5 epochs, best validation AUC at epoch 1) |
-| Internal and Celeb-DF evaluation | ✅ Done |
-| Mixed-dataset generalisation run (FF++ 4 methods + Celeb-DF + DFDC, augmentation, unseen FaceShifter test) | ⏳ Ready to run on Kaggle |
-| Calibration, joint fine-tuning, external detector comparison | 🔜 Planned |
+| Run 1: FF++ Deepfakes only, Celeb-DF as unseen dataset | ✅ Done (archived) |
+| Run 2: mixed datasets (FF++ 4 methods + Celeb-DF + DFDC, augmentation, unseen FaceShifter test) | ✅ Done (**current model**) |
+| Calibration, joint fine-tuning, external detector comparison, distant-face detection | 🔜 Planned |
 
-### Results
+### Results: Run 2, mixed datasets (current model)
 
-Full from-scratch run on a Kaggle Tesla T4: 256 sampled frames per video, 5 epochs per stage, batch 32, 32 crops per training video per epoch, mixed precision. It took about 2 hours, and the split matched `splits/reference-split.csv` exactly. Video-level metrics; thresholds were selected on FF++ validation data only.
+Kaggle Tesla T4, about 3 h 40 min end to end (face preparation took 2 h 22 min).
+- **Data:** 13,564 videos pooled (FF++ 5,150, Celeb-DF 3,390, DFDC 5,024); 10,971 passed face preparation.
+- **Settings:** 64 frames per video, 5 epochs per stage, batch 32, 16 augmented crops per training video per epoch, mixed precision.
+- **Checkpoints:** best validation AUC at spatial epoch 4 (0.978) and LSTM epoch 1 (0.988).
+- **Metrics:** video level, with one threshold selected on the pooled validation split.
+
+| Test group | Videos | ROC-AUC | Accuracy | F1 | Precision | Recall | False-positive rate |
+|---|---|---|---|---|---|---|---|
+| **All datasets** | 1,327 | **0.989** | **94.7%** | **0.962** | 0.978 | 0.947 | 0.052 |
+| FaceForensics++ (4 trained methods) | 649 | 0.985 | 95.5% | 0.972 | 0.977 | 0.967 | 0.092 |
+| Celeb-DF v2 | 403 | 0.988 | 92.3% | 0.943 | 0.977 | 0.911 | 0.049 |
+| DFDC | 275 | 0.994 | 96.4% | 0.964 | 0.985 | 0.943 | 0.015 |
+| FF++ Deepfakes / Face2Face / FaceSwap / NeuralTextures | ~260 each | 0.997 / 0.993 / 0.994 / 0.957 | | | | 1.00 / 0.99 / 1.00 / 0.88 | 0.092 |
+| **FF++ FaceShifter (unseen method)** | 260 | **0.641** | 56.5% | 0.339 | 0.707 | 0.223 | 0.092 |
+
+CNN + LSTM shown; the CNN-only baseline scores AUC 0.987 / F1 0.944 overall (all groups are in `runs/mixed-test.json` and the dashboard).
+
+- **On the kinds of fakes it was trained on, it generalises across datasets.** Celeb-DF went from AUC 0.715 / recall 18% (unseen, Run 1) to 0.988 / 91% once its data was in training. The two numbers are not a like-for-like comparison: in Run 2 Celeb-DF is in-domain, with different identities in test.
+- **A genuinely new manipulation method is still mostly missed.** FaceShifter was never trained on: AUC 0.64, only 22% caught. This is the honest measure of generalisation to an unseen deepfake tool.
+- **The LSTM helps on the pooled test** (F1 0.944 → 0.962, Celeb-DF recall 84% → 91%).
+- **About 1 in 11 real FF++ videos is flagged** (false-positive rate 9.2%); real DFDC and Celeb-DF videos are flagged less often (1.5% and 4.9%).
+- **Coverage gap:** 636 of 2,093 test videos could not be scored. Most were DFDC (479 of 754): faces too small or distant for the short-range face detector, more than one face, or no continuous 16-frame window. The dashboard says "unable to assess" for such media.
+
+### Results: Run 1, FF++ Deepfakes only (archived)
+
+Full from-scratch run on a Kaggle Tesla T4: 256 sampled frames per video, 5 epochs per stage, batch 32, 32 crops per training video per epoch, mixed precision. It took about 2 hours, and the split matched `splits/reference-split.csv` exactly. Video-level metrics; thresholds were selected on FF++ validation data only. Its checkpoints and reports are kept locally under `runs/archive/run1-ffpp-deepfakes/`.
 
 | Model | Test set | Videos | ROC-AUC | F1 | Precision | Recall | False-positive rate |
 |---|---|---|---|---|---|---|---|

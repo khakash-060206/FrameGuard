@@ -6,7 +6,7 @@ const titles = {
   overview: ['The experiment, at a glance.', 'From training signals to held-out performance. Every number backed by a saved result.'],
   training: ['Follow the learning process.', 'Epoch-by-epoch signals from your spatial and temporal training runs.'],
   evaluation: ['Measure what generalises.', 'Compare spatial and temporal models on the same held-out videos.'],
-  datasets: ['Know the data behind the model.', 'Traceable inputs, explicit partitions, and a separate external evaluation set.'],
+  datasets: ['Know the data behind the model.', 'Traceable inputs, explicit partitions, and held-out test data.'],
   inspect: ['Take a closer look.', 'Local facial-manipulation assessment using your own trained checkpoint.']
 };
 const number = value => Number.isFinite(value) ? value.toLocaleString('en-IN') : '—';
@@ -127,10 +127,14 @@ function predictionTable() {
 function datasets() {
   const data = state.inventory, entries = Object.entries(data?.splits || {});
   FGCharts.plot($('split-chart'), [{name: 'Real', points: entries.map(([, v], i) => [i + .5, v.real])}, {name: 'Manipulated', points: entries.map(([, v], i) => [i + .5, v.manipulated])}], {title: 'Dataset split sizes', bars: true, xMax: Math.max(1, entries.length), yMax: Math.max(1, ...entries.flatMap(([, v]) => [v.real, v.manipulated])), categories: entries.map(([k]) => k), yLabel: 'Videos', empty: 'No imported dataset inventory yet.'});
-  table('split-table', ['Partition', 'Real', 'Manipulated', 'Total', 'Purpose'], entries.map(([split, v]) => [split, number(v.real), number(v.manipulated), number(v.real + v.manipulated), {train: 'Fit model weights', val: 'Select checkpoint & thresholds', test: 'Internal held-out evaluation', external: 'Cross-dataset evaluation'}[split]]));
+  const purpose = {train: 'Fit model weights', val: 'Select checkpoint & thresholds', test: 'Held-out evaluation', external: 'Cross-dataset evaluation'};
+  const rows = data?.by_dataset ? Object.entries(data.by_dataset).map(([key, v]) => { const [dataset, split] = key.split('/'); return [`${dataset} · ${split}`, v, split]; }) : entries.map(([split, v]) => [split, v, split]);
+  table('split-table', ['Partition', 'Real', 'Manipulated', 'Total', 'Purpose'], rows.map(([name, v, split]) => [name, number(v.real), number(v.manipulated), number(v.real + v.manipulated), purpose[split]]));
   $('protocol').textContent = data?.protocol || 'Import archives to register a reproducible split protocol.';
+  $('protocol-note').textContent = data?.unseen_method ? `Thresholds are selected on validation data only. Unseen-method test: ${data.unseen_method}.` : 'Related original and manipulated source videos stay in the same split. Celeb-DF is held out for external evaluation; it never selects training thresholds.';
+  $('identity-note').textContent = data?.identity_limit || 'Source separation does not establish identity separation when identity metadata is absent.';
   $('data-verification').textContent = data?.verification || 'No extraction verification recorded.';
-  $('archive-list').replaceChildren(); for (const archive of data?.archives || []) {const row = element('div', undefined, 'archive-item'); row.append(element('span', archive.name), element('span', `${(archive.bytes / 1e9).toFixed(2)} GB`)); $('archive-list').append(row);}
+  $('archive-list').replaceChildren(); for (const archive of data?.archives || []) {const row = element('div', undefined, 'archive-item'); row.append(element('span', archive.name), element('span', Number.isFinite(archive.bytes) ? `${(archive.bytes / 1e9).toFixed(2)} GB` : archive.type || '')); $('archive-list').append(row);}
 }
 function render() {
   selectOptions($('report-select'), sortedReports().map(r => [r.name, r.name]), 'No evaluations yet');
